@@ -86,3 +86,16 @@ SHA-256: `91f2ba191af80a72e75595bb4f4b1e5f50a6e0368b356f289829c9b31c382b45`.
 - [실측 JSON](benchmarks/macos-index-100k.json).
 
 주기 감시 CLI: 파일 생성 감지·누락 오류·재생성 후 수정 감지·프로세스 재시작 상태 보존 통과. `watch-red.log`에 누락 진입점 실패, `watch-green.log`·`watch-clippy.log`에 전체 회귀/정적 검사 결과 보존.
+
+## 100만 작은 파일 로컬 인덱스 실측
+
+`python3 scripts/bench_index.py --binary target/release/everywhere --work-dir "$TMPDIR" --files 1000000 --report "$TMPDIR/everywhere-index-1m.json"`
+
+- 최초 스캔 120.3834초, 변경 없는 전체 재검사 124.4487초.
+- 최초 스캔 최대 RSS 262,602,752 bytes (250.44 MiB).
+- 100만 합성 파일의 독립 목록·SHA-256 비교: 누락 0, 내용 불일치 0.
+- 집계 SHA-256: `231768af19e5b28376d81b554dde84eddcd5b386ddc446df8f54101ed2e29d83`.
+- 로컬 인덱스 실제 CLI 측정. 네트워크 전송·상주 유휴 RSS·LAN 반영 지연은 미측정.
+- [실측 JSON](benchmarks/macos-index-1m.json).
+
+최종 재검증: `final-release.log`·`final-tests.log`·`final-clippy.log`에서 release build, 24개 테스트, 형식 검사, Clippy 경고 0 확인.

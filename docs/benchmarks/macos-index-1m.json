@@ -1,0 +1,14 @@
+{
+  "scope": "local index, real CLI; no file transfer",
+  "files": 1000000,
+  "bytes_per_file": "variable ASCII line",
+  "cache": "uncontrolled, recently created files",
+  "create_seconds": 86.71988120803144,
+  "initial_scan_seconds": 120.38342333305627,
+  "unchanged_rescan_seconds": 124.44867237494327,
+  "initial_scan_max_rss_bytes": 262602752,
+  "aggregate_sha256": "231768af19e5b28376d81b554dde84eddcd5b386ddc446df8f54101ed2e29d83",
+  "missing_files": 0,
+  "content_mismatches": 0,
+  "idle_agent_rss": "not measured; scan CLI exits"
+}
