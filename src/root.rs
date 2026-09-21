@@ -92,6 +92,15 @@ impl Root {
             dir: Dir::open_ambient_dir(path, ambient_authority())?,
         })
     }
+    pub fn same_directory(&self, other: &Self) -> Result<bool> {
+        // Compare the opened handles, not paths or copied marker contents.
+        // This identity is session-local: legitimate remounts may change the
+        // device identifier and must be reopened by a fresh session.
+        Ok(
+            same_file::Handle::from_file(self.dir.try_clone()?.into_std_file())?
+                == same_file::Handle::from_file(other.dir.try_clone()?.into_std_file())?,
+        )
+    }
     pub fn content(&self, path: &str) -> Result<Option<Content>> {
         validate_path(path)?;
         read_content(&self.dir, Path::new(path))

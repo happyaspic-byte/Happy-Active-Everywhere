@@ -158,6 +158,25 @@ Local verification of the resulting tree:
   the receiver, and reconnect. They verify exact causal-head preservation or
   preservation of a local edit made before restart. Failure evidence is kept.
 
+## Volume-fault follow-up — 2026-09-22
+
+Base `e3b0e2f`: all three hosted OS jobs passed workflow `35636579546`.
+A new regression then reproduced a live directory-handle mismatch: replacing
+the configured root with a directory containing a copied marker caused an
+existing session to scan its old root and generate an incorrect tombstone.
+Comparing opened directory identities fixes the observed failure. The scanner
+also rechecks the root before committing its DB transaction. Local verification
+passed **65 Rust tests**, formatting, Clippy and release compilation.
+
+The [volume acceptance script](volume-faults.md) adds actual ENOSPC, detached,
+read-only and in-flight-detached APFS image scenarios to macOS CI. Initial local
+probes passed destination-full and state-full preservation/recovery. They also
+exposed an automation issue: `hdiutil attach` can return partitions before the
+whole device; detaching the first entry stalled the native utility. The harness
+now explicitly selects the GPT whole device. Final qualification requires the
+complete corrected script, including exact pre-recovery causal-head comparison,
+to pass; earlier partial probes are not a five-scenario pass.
+
 These are same-host results, not physical-device or WAN measurements.
 [Safety details and commands](safety-hardening.md) describe the test boundary,
 upgrade requirements, and remaining filesystem/ACL limitations. The 100 GiB

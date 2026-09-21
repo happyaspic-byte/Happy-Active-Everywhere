@@ -402,6 +402,41 @@ fn missing_mount_marker_never_creates_deletion_revisions() {
     assert_eq!(head_state(&node, "note"), before);
 }
 
+#[cfg(unix)]
+#[test]
+fn replaced_root_with_copied_marker_cannot_scan_a_stale_directory_handle() {
+    use everywhere::share::Share;
+    let tmp = TempDir::new().unwrap();
+    let node = Node::new(tmp.path(), "a");
+    fs::write(node.root.join("note"), b"keep current root").unwrap();
+    let share = Share::open(&node.state, "personal").unwrap();
+    share.scan(false).unwrap();
+    let before = share.status().unwrap();
+    let moved = tmp.path().join("old-root");
+    fs::rename(&node.root, &moved).unwrap();
+    fs::create_dir(&node.root).unwrap();
+    fs::copy(
+        moved.join(".everywhere-folder"),
+        node.root.join(".everywhere-folder"),
+    )
+    .unwrap();
+    fs::copy(moved.join("note"), node.root.join("note")).unwrap();
+    fs::remove_file(moved.join("note")).unwrap();
+    assert!(
+        share.scan(true).is_err(),
+        "stale handle generated a deletion for the current root"
+    );
+    assert_eq!(share.status().unwrap(), before);
+    assert_eq!(
+        sha(&fs::read(node.root.join("note")).unwrap()),
+        sha(b"keep current root")
+    );
+    drop(share);
+    // A fresh session may bind to the restored root and continue normally.
+    node.command("share-scan", &[]);
+    assert_eq!(node.status(), before);
+}
+
 #[test]
 fn malformed_epoch_reports_error_instead_of_panicking() {
     let tmp = TempDir::new().unwrap();

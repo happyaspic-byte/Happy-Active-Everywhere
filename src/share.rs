@@ -272,6 +272,10 @@ impl Share {
     pub fn check_root(&self) -> Result<()> {
         let current = Root::open(&self.config.root)?;
         ensure!(
+            self.root.same_directory(&current)?,
+            "share root directory changed during this session; reconnect to reopen it"
+        );
+        ensure!(
             current
                 .dir
                 .symlink_metadata(".everywhere-folder")?
@@ -558,6 +562,7 @@ impl Share {
             [],
             |r| r.get::<_, i64>(0),
         )?)?;
+        self.check_root()?;
         transaction.commit()?;
         Ok(report)
     }

@@ -63,6 +63,23 @@ jobs:
           retention-days: 14
       - name: Release build
         run: cargo build --release --locked
+      - name: Real APFS volume fault acceptance
+        if: ${{ success() && runner.os == 'macOS' }}
+        run: python3 scripts/verify-volume-faults.py --binary target/release/everywhere --report folder-report/volume-ci.json
+      - name: Upload volume fault evidence
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: volume-fault-evidence-${{ github.sha }}
+          path: |
+            folder-report/volume-ci.json
+            folder-report/volume-evidence-*/**/*.json
+            folder-report/volume-evidence-*/**/*.sql
+            folder-report/volume-evidence-*/**/*.sqlite
+            folder-report/volume-evidence-*/**/*.stdout
+            folder-report/volume-evidence-*/**/*.stderr
+          if-no-files-found: warn
+          retention-days: 14
       - name: Release folder benchmark
         if: ${{ success() && runner.os == 'Linux' }}
         run: python scripts/bench_folder.py --binary target/release/everywhere --mib 128 --files 1000 --report folder-report/release.json --require-delta

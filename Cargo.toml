@@ -12,6 +12,7 @@ fs2 = "0.4"
 rcgen = "0.14"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 cap-std = "4.0.3"
+same-file = "1.0.6"
 unicode-normalization = "0.1"
 notify = "8"
 axum = "0.8"

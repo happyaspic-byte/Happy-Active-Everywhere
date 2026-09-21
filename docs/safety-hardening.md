@@ -72,6 +72,7 @@ that causal heads stay unchanged. Failures retain the temporary device states,
 objects, journals, and sender/receiver logs, printing their location.
 
 The injected SQLite error deterministically leaves the publication/DB gap
-open; it is not an actual disk-full or power-loss experiment. Actual volume
-detachment, ENOSPC, physical devices, NAS, WAN, and elapsed long-duration tests
-are still separate gates. These same-host tests do not establish them.
+open; it is not an actual disk-full or power-loss experiment. The subsequent
+[bounded volume acceptance](volume-faults.md) separately exercises real ENOSPC,
+read-only APFS media and detachment. Physical devices, NAS, WAN, power loss and
+elapsed long-duration tests remain separate gates.
