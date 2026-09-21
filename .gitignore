@@ -3,3 +3,7 @@
 .DS_Store
 
 /browser-report/
+
+/dist/
+
+__pycache__/

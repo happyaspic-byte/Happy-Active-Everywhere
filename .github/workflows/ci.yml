@@ -39,6 +39,10 @@ jobs:
       - name: Tests
         if: ${{ !cancelled() }}
         run: cargo test --locked --all-targets --no-fail-fast -- --nocapture
+      - name: Installer acceptance
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python scripts/verify-install.py --binary target/debug/everywhere${{ runner.os == 'Windows' && '.exe' || '' }}
       - name: Browser acceptance
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         shell: bash
@@ -56,14 +60,14 @@ jobs:
           retention-days: 14
       - name: Release build
         run: cargo build --release --locked
+      - name: Package verified release build
+        run: python scripts/package.py
       - name: Upload binary and verification documents
         uses: actions/upload-artifact@v4
         with:
           name: everywhere-${{ matrix.os }}-${{ github.sha }}
           path: |
-            target/release/everywhere
-            target/release/everywhere.exe
-            README.md
-            docs/
+            dist/*.zip
+            dist/*.sha256
           if-no-files-found: error
           retention-days: 14

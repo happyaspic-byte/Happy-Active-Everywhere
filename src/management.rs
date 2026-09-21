@@ -125,7 +125,13 @@ fn outcome(result: Result<Value>) -> Response {
 }
 async fn status(State(app): State<Arc<App>>) -> Response {
     outcome(
-        match tokio::task::spawn_blocking(move || -> Result<Value> { let mut status = share::catalog(&app.state)?; status["jobs"] = app.jobs.status()?; Ok(status) }).await {
+        match tokio::task::spawn_blocking(move || -> Result<Value> {
+            let mut status = share::catalog(&app.state)?;
+            status["jobs"] = app.jobs.status()?;
+            Ok(status)
+        })
+        .await
+        {
             Ok(result) => result,
             Err(error) => Err(error.into()),
         },
@@ -134,8 +140,13 @@ async fn status(State(app): State<Arc<App>>) -> Response {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 enum Operation {
-    SaveJob { job: crate::jobs::Config },
-    SetJobEnabled { id: String, enabled: bool },
+    SaveJob {
+        job: crate::jobs::Config,
+    },
+    SetJobEnabled {
+        id: String,
+        enabled: bool,
+    },
     Pending {
         folder: String,
     },
@@ -179,8 +190,12 @@ async fn command(State(app): State<Arc<App>>, Json(operation): Json<Operation>) 
     outcome(
         match tokio::task::spawn_blocking(move || -> Result<Value> {
             match operation {
-            Operation::SaveJob { job } => { app.jobs.save(job)?; }
-            Operation::SetJobEnabled { id, enabled } => { app.jobs.set_enabled(&id, enabled)?; }
+                Operation::SaveJob { job } => {
+                    app.jobs.save(job)?;
+                }
+                Operation::SetJobEnabled { id, enabled } => {
+                    app.jobs.set_enabled(&id, enabled)?;
+                }
                 Operation::Pending { folder } => {
                     return Share::open(&app.state, &folder)?.pending();
                 }

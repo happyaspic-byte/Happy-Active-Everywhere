@@ -278,26 +278,29 @@ async fn main() -> Result<()> {
             continuous,
             interval_ms,
         } => {
-            if parent_watch { everywhere::jobs::watch_parent(); }
+            if parent_watch {
+                everywhere::jobs::watch_parent();
+            }
             loop {
-            let result = everywhere::sync::connect(&share.state, &share.folder, &peer, addr).await;
-            match result {
-                Ok(()) => println!(
-                    "{}",
-                    serde_json::json!({"status":"complete","folder":share.folder})
-                ),
-                Err(error) if continuous => eprintln!(
-                    "{}",
-                    serde_json::json!({"status":"retrying","error":format!("{error:#}")})
-                ),
-                Err(error) => return Err(error),
+                let result =
+                    everywhere::sync::connect(&share.state, &share.folder, &peer, addr).await;
+                match result {
+                    Ok(()) => println!(
+                        "{}",
+                        serde_json::json!({"status":"complete","folder":share.folder})
+                    ),
+                    Err(error) if continuous => eprintln!(
+                        "{}",
+                        serde_json::json!({"status":"retrying","error":format!("{error:#}")})
+                    ),
+                    Err(error) => return Err(error),
+                }
+                if !continuous {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
             }
-            if !continuous {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
         }
-        },
         Command::SyncServe {
             parent_watch,
             share,
@@ -305,7 +308,9 @@ async fn main() -> Result<()> {
             listen,
             once,
         } => {
-            if parent_watch { everywhere::jobs::watch_parent(); }
+            if parent_watch {
+                everywhere::jobs::watch_parent();
+            }
             everywhere::sync::serve(&share.state, &share.folder, &peer, listen, once).await?;
         }
 

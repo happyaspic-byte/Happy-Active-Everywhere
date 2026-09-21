@@ -142,6 +142,7 @@ async fn serve_objects<S: AsyncRead + AsyncWrite + Unpin>(
         if requested.is_empty() {
             return Ok(());
         }
+        ensure!(share.config.mode != Mode::ReceiveOnly, "receive-only share cannot export content objects");
         for hash in requested {
             check()?;
             send_object(stream, &share.object_path(&hash)?, &hash, check.clone()).await?;
@@ -307,10 +308,18 @@ mod tests {
         share.scan(false).unwrap();
         let hash = blake3::hash(b"local-only content").to_hex().to_string();
         let (mut client, mut server) = tokio::io::duplex(8192);
-        wire::send(&mut client, vec![hash], Timing::control()).await.unwrap();
+        wire::send(&mut client, vec![hash], Timing::control())
+            .await
+            .unwrap();
         let check: Approval = Arc::new(|| Ok(()));
-        let outcome = tokio::time::timeout(std::time::Duration::from_millis(100), serve_objects(&mut server, &share, &check)).await;
-        let error = outcome.expect("receive-only peer began exporting an object").unwrap_err();
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            serve_objects(&mut server, &share, &check),
+        )
+        .await;
+        let error = outcome
+            .expect("receive-only peer began exporting an object")
+            .unwrap_err();
         assert!(error.to_string().contains("receive-only"));
     }
 }

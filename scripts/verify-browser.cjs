@@ -37,7 +37,7 @@ let server, browser;
   await page.getByLabel('관리 토큰',{exact:true}).fill(token);
   await page.getByRole('button',{name:'연결하기 →',exact:true}).click();
   await page.locator('#workspace').waitFor({state:'visible'});
-  await page.getByLabel('폴더 ID',{exact:true}).fill('photos');
+  await page.locator('#folder-form').getByLabel('폴더 ID',{exact:true}).fill('photos');
   await page.getByLabel('이 컴퓨터의 전체 경로',{exact:true}).fill(root);
   await page.getByRole('button',{name:'폴더 등록 ＋',exact:true}).click();
   await page.getByRole('heading',{name:'photos',exact:true}).waitFor();
