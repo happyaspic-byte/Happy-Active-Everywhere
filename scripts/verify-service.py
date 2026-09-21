@@ -21,6 +21,7 @@ repo = Path(__file__).resolve().parent.parent
 base = Path(tempfile.mkdtemp(prefix='everywhere-native-service-'))
 commands = []
 server = None
+server_log = None
 installed = False
 failure = None
 state = base / "a-state α $HOME %USERNAME% 'quote'"
@@ -353,18 +354,25 @@ finally:
                 report['status'] = 'failed'
     if server is not None:
         server.kill(); server.wait()
+        server.stdout.close()
+    if server_log is not None:
+        server_log.close()
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text(json.dumps(report, indent=2) + '\n')
-    args.report.with_suffix('.commands.json').write_text(json.dumps(commands, indent=2) + '\n')
     if failure is None:
-        shutil.rmtree(base)
-    else:
+        try:
+            shutil.rmtree(base)
+        except OSError as error:
+            failure = error
+            report.update(status='failed', cleanup_error=repr(error), fixture=str(base))
+    if failure is not None:
         evidence = args.report.parent / ('service-evidence-' + base.name)
         evidence.mkdir(exist_ok=False)
         for path in base.rglob('*'):
             if path.is_file() and (path.suffix in ('.json', '.log', '.sqlite', '.stderr') or path.name.endswith(('.sqlite-wal', '.sqlite-shm'))):
                 target = evidence / path.relative_to(base); target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(path, target)
         print(f'Service failure fixture retained at {base}')
+    args.report.write_text(json.dumps(report, indent=2) + '\n')
+    args.report.with_suffix('.commands.json').write_text(json.dumps(commands, indent=2) + '\n')
 print(json.dumps(report, indent=2))
 if failure is not None:
     raise failure

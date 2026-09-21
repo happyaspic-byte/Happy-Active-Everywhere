@@ -40,6 +40,13 @@ trigger also recovers a killed supervisor while IgnoreNew preserves a running
 instance. Acceptance tests both failures and verifies resumed content plus child
 termination. These Windows changes require fresh native qualification.
 
+`084886f` passed all 17 Windows native behavior cases, including both manager and
+wrapper crashes, child exit, scheduled restart, literal paths and resumed SHA-256
+content. Its job then failed removing the disposable fixture: the harness still
+held `server.stderr` open, which Windows refuses to unlink. Cleanup now closes
+that owned log handle and records cleanup failures before publishing the report.
+The following full workflow must pass before calling this an all-green candidate.
+
 A local restart test also exposed an incorrect test precondition: visible bytes
 could precede DB acknowledgement. Killing there and editing while stopped left
 two preserved, concurrent revisions, so asserting a particular primary filename

@@ -248,3 +248,18 @@ ones. A permission regression showed unreadable deployment state was reported as
 uninstalled; metadata errors now propagate instead of being treated as absence.
 The new Linux/Windows native adapters require exact-head Actions qualification;
 a local Mac pass is not cross-platform proof.
+
+Independent review and native CI corrections are recorded in
+[service-review.md](service-review.md). The adapters now validate loaded commands,
+serialize the complete lifecycle, preserve literal variable/quote paths, and
+distinguish permission errors from missing native registrations. Windows resolves
+principal names to SIDs and uses an owned supervisor plus an enabled-only scheduled
+trigger to recover either manager or supervisor death.
+
+`c734ccd` and `666f904` passed complete Ubuntu/macOS workflows. Linux native
+acceptance ran 18 cases, including stopping a suspended worker. Its release
+measurement used 128 MiB plus 1,000 files: 135,077,084 initial client TLS bytes,
+1,060,796 after a one-block edit, and 1,466 unchanged, with zero missing files or
+SHA-256 mismatches. `084886f` also passed all 17 Windows native behavior cases,
+then failed fixture cleanup on an open log handle; that harness issue is corrected.
+The corrected head's final all-OS workflow remains the qualification gate.
