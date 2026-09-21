@@ -337,3 +337,32 @@ commands and boundaries. NAS synchronization is **still unsupported in this
 tested configuration**. No 3-peer NAS roundtrip or long-duration process was
 started after the registration failure. User files were untouched; synthetic
 fixtures and private failure evidence were retained for inspection.
+
+
+## Managed three-peer stability controller — local acceptance
+
+The new [run/status controller](managed-soak.md) keeps three actual foreground
+managers and six managed workers under parent-pipe ownership, exchanges real
+TLS traffic through counted relays, and compares literal expected content with
+independent SHA-256 and read-only causal/queue snapshots. It records copied
+executable/harness hashes, elapsed continuity, sampled RSS and storage bounds.
+
+The first local two-cycle smoke reached its scenario checks but failed relay
+teardown. A rapid half-close/partition/reconnect regression reproduced a receiver
+still blocked after cross-thread socket closure. A single owning thread with
+cancellable nonblocking I/O now passes the same regression. Cleanup failures also
+no longer mask the original failure or skip other resource cleanup and reporting.
+A second regression required normal overwritten revisions, as well as conflicts,
+to enter the independent retained-object oracle.
+
+Local macOS acceptance after these changes: 14 Python guards and 93 Rust tests
+passed. The two-cycle managed smoke completed 68.31 seconds of observation with
+a maximum 0.70-second gap, preserved and rehashed 23 objects per device, performed
+four planned manager restarts, and verified every owned process had stopped.
+The unchanged interval transferred at most 14,121 TLS bytes, below the 128 KiB
+bound. The run correctly reported qualification_72h=false. These numbers describe
+a short same-host debug-binary run; they do not establish a 72-hour qualification.
+
+Three-OS managed smoke Actions and a fresh independent review are required before
+starting the real 72-hour run. Actual elapsed qualification, NAS/physical devices,
+LAN/WAN, reboot/power loss and the deferred 100 GiB gate remain open.

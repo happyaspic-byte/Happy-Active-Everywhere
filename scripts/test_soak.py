@@ -1,5 +1,6 @@
 """Negative acceptance checks for the stability test's independent oracle."""
 import hashlib
+import json
 import os
 from pathlib import Path
 import socket
@@ -8,10 +9,12 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 
-from soak_oracle import Observation, assert_manifest, manifest, index_snapshot
-from soak_runtime import Node, Relay, RunLock, owner_is_live
+from soak_oracle import Observation, assert_manifest, manifest, index_snapshot, file_value
+from soak_runtime import Node, Relay, RunLock, owner_is_live, process_alive
+from soak import Controller
 
 
 class OracleTests(unittest.TestCase):
@@ -71,6 +74,46 @@ class OracleTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_relay_stops_during_half_closed_partition_reconnect_churn(self):
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0)); listener.listen(100); listener.settimeout(.1)
+        stopped = threading.Event()
+        peers = []
+        def accept():
+            while not stopped.is_set():
+                try:
+                    peer, _ = listener.accept()
+                    peers.append(peer)  # Deliberately never send a response/EOF.
+                except socket.timeout:
+                    continue
+                except OSError:
+                    return
+        worker = threading.Thread(target=accept, daemon=True)
+        worker.start()
+        clients = []
+        try:
+            for _ in range(10):
+                relay = Relay(listener.getsockname())
+                try:
+                    for index in range(8):
+                        client = socket.create_connection(relay.address, timeout=2)
+                        clients.append(client)
+                        client.sendall(b'forwarded')
+                        if index % 2:
+                            client.shutdown(socket.SHUT_WR)
+                        if index % 3 == 0:
+                            relay.partition(); relay.resume()
+                    time.sleep(.01)
+                finally:
+                    started = time.monotonic()
+                    relay.close()
+                    self.assertLess(time.monotonic() - started, 2, 'shutdown waited for remote EOF')
+        finally:
+            stopped.set(); listener.close(); worker.join(timeout=2)
+            for stream in clients + peers:
+                stream.close()
+            self.assertFalse(worker.is_alive())
+
     def test_real_manager_scan_and_read_only_index_snapshot(self):
         binary = Path(__file__).resolve().parents[1] / 'target/debug' / (
             'everywhere.exe' if os.name == 'nt' else 'everywhere')
@@ -143,6 +186,126 @@ class RuntimeTests(unittest.TestCase):
         finally:
             relay.close(); listener.close(); worker.join(timeout=5)
             self.assertFalse(worker.is_alive())
+
+
+class ControllerTests(unittest.TestCase):
+    def setUp(self):
+        self.runner = Path(__file__).with_name('soak.py').resolve()
+        self.assertTrue(self.runner.is_file(), 'managed-soak runner is missing')
+        self.binary = Path(__file__).resolve().parents[1] / 'target/debug' / (
+            'everywhere.exe' if os.name == 'nt' else 'everywhere')
+
+    def controller(self, root, binary=None):
+        return Controller(SimpleNamespace(work_dir=root, binary=binary or self.binary,
+            seconds=1, min_cycles=1, cycle_interval=0, max_bytes=4 * 1024**3,
+            reserve_bytes=0))
+
+    def test_normal_overwritten_revisions_enter_independent_retention_oracle(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            controller = self.controller(Path(temporary) / 'run')
+            node = Node(self.binary, controller.root, 'a')
+            controller.nodes = [node]; controller.down.remove('a')
+            try:
+                node.start()
+                for payload in [b'original before remote overwrite', b'next revision']:
+                    (node.root / 'note').write_bytes(payload)
+                    node.api({'action': 'scan', 'folder': 'soak'})
+                    controller.expected = {'note': file_value(payload)}
+                    controller.converge()
+                self.assertEqual(set(controller.retained['a'].values()), {
+                    hashlib.sha256(value).hexdigest() for value in
+                    [b'original before remote overwrite', b'next revision']})
+            finally:
+                node.stop(); controller.event_stream.close(); controller.lock.close()
+
+    def test_cleanup_error_still_stops_other_resources_and_records_failure(self):
+        class FailingClose:
+            def close(self):
+                raise OSError('synthetic teardown failure')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'run'
+            controller = self.controller(root, Path(temporary) / 'missing-binary')
+            node = Node(self.binary, root, 'a'); node.start()
+            pid = node.process.pid
+            relay = Relay(('127.0.0.1', 1))
+            controller.nodes = [node]; controller.down.remove('a')
+            controller.relays = [FailingClose(), relay]
+            try:
+                with self.assertRaises(FileNotFoundError):
+                    controller.run()
+                report = json.loads((root / 'summary.json').read_text())
+                self.assertEqual(report['status'], 'failed')
+                self.assertFalse(report['qualification_72h'])
+                self.assertTrue(report['cleanup_errors'])
+                self.assertFalse(process_alive(pid))
+                self.assertFalse(relay.thread.is_alive())
+                self.assertFalse(owner_is_live(root / 'run.lock', os.getpid()))
+            finally:
+                node.stop(); relay.close()
+                controller.event_stream.close(); controller.lock.close()
+
+    def test_existing_workspace_is_not_modified(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'sentinel').write_bytes(b'existing user directory')
+            result = subprocess.run([sys.executable, self.runner, 'run', '--binary', self.binary,
+                                     '--work-dir', root, '--seconds', '1'],
+                                    capture_output=True, text=True, timeout=15)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(sorted(p.name for p in root.iterdir()), ['sentinel'])
+            self.assertEqual((root / 'sentinel').read_bytes(), b'existing user directory')
+
+    def test_stale_running_report_is_not_live_or_qualified(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'run.lock').write_bytes(b'1')
+            (root / 'progress.json').write_text(json.dumps({
+                'status': 'running', 'pid': os.getpid(), 'heartbeat_utc': time.time(),
+                'observed_seconds': 999999, 'qualification_72h': False,
+            }))
+            result = subprocess.run([sys.executable, self.runner, 'status', '--work-dir', root],
+                                    capture_output=True, text=True, timeout=15, check=True)
+            value = json.loads(result.stdout)
+            self.assertEqual(value['status'], 'interrupted')
+            self.assertFalse(value['owner_live'])
+            self.assertFalse(value['qualification_72h'])
+
+    def test_controller_death_stops_its_real_managers_and_workers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'new-run'
+            log = (Path(temporary) / 'controller.log').open('w')
+            owner = subprocess.Popen([sys.executable, self.runner, 'run', '--binary', self.binary,
+                                      '--work-dir', root, '--seconds', '600', '--cycle-interval', '0'],
+                                     stdout=log, stderr=log)
+            pids = []
+            try:
+                deadline = time.monotonic() + 90
+                while time.monotonic() < deadline:
+                    self.assertIsNone(owner.poll(), (Path(temporary) / 'controller.log').read_text())
+                    try:
+                        value = json.loads((root / 'progress.json').read_text())
+                        managers = [node['pid'] for node in value.get('nodes', []) if node.get('pid')]
+                        workers = [job['pid'] for node in value.get('nodes', [])
+                                   for job in node.get('jobs', []) if job.get('running') and job.get('pid')]
+                        if len(managers) == 3 and len(workers) == 6:
+                            pids = managers + workers
+                            break
+                    except FileNotFoundError:
+                        pass
+                    time.sleep(.1)
+                self.assertEqual(len(pids), 9, 'managed process tree never became observable')
+                owner.kill(); owner.wait(timeout=10)
+                deadline = time.monotonic() + 15
+                while any(process_alive(pid) for pid in pids) and time.monotonic() < deadline:
+                    time.sleep(.1)
+                self.assertFalse(any(process_alive(pid) for pid in pids), f'owned processes survived: {pids}')
+                result = subprocess.run([sys.executable, self.runner, 'status', '--work-dir', root],
+                                        capture_output=True, text=True, timeout=15, check=True)
+                self.assertEqual(json.loads(result.stdout)['status'], 'interrupted')
+            finally:
+                if owner.poll() is None:
+                    owner.kill(); owner.wait()
+                log.close()
 
 
 if __name__ == '__main__':

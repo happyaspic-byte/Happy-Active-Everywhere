@@ -3,9 +3,12 @@ import json
 import os
 from pathlib import Path
 import queue
+import select
 import socket
 import subprocess
+import sys
 import threading
+import traceback
 import urllib.error
 import urllib.request
 import uuid
@@ -87,6 +90,25 @@ def owner_is_live(path, pid):
         return False
 
 
+def rss_bytes(pids):
+    values = sorted({int(pid) for pid in pids if pid and int(pid) > 0})
+    if not values:
+        return None
+    ids = ','.join(map(str, values))
+    if os.name == 'nt':
+        command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                   f'Get-Process -Id {ids} -ErrorAction SilentlyContinue | '
+                   'ForEach-Object { $_.WorkingSet64 }']
+        multiplier = 1
+    else:
+        command = ['ps', '-o', 'rss=', '-p', ids]
+        multiplier = 1024
+    result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+    assert result.returncode in (0, 1), f'RSS query failed: {result.stderr}'
+    samples = [int(value) * multiplier for value in result.stdout.split()]
+    return sum(samples) if samples else None
+
+
 class Relay:
     def __init__(self, destination):
         self.destination = tuple(destination)
@@ -95,7 +117,7 @@ class Relay:
         self.listener.listen(8); self.listener.settimeout(.2)
         self.address = self.listener.getsockname()
         self.guard = threading.Lock()
-        self.sockets = set()
+        self.cancellations = set()
         self.workers = set()
         self.counts = [0, 0]
         self.connections = 0
@@ -125,42 +147,59 @@ class Relay:
                 if not self.enabled or self.stopping:
                     client.close()
                     continue
-                self.sockets.add(client)
-                worker = threading.Thread(target=self._connection, args=(client,), daemon=True)
+                cancelled = threading.Event()
+                self.cancellations.add(cancelled)
+                worker = threading.Thread(target=self._connection, args=(client, cancelled), daemon=True)
                 self.workers.add(worker)
                 worker.start()
 
-    def _connection(self, client):
+    def _connection(self, client, cancelled):
         server = None
         try:
             server = socket.create_connection(self.destination, timeout=3)
-            client.settimeout(120); server.settimeout(120)
+            client.setblocking(False); server.setblocking(False)
             client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             server.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             with self.guard:
-                if self.stopping or not self.enabled:
+                if cancelled.is_set():
                     return
-                self.sockets.add(server); self.connections += 1
-            def pump(source, target, direction):
-                try:
-                    while True:
-                        data = source.recv(65536)
-                        if not data:
-                            break
-                        target.sendall(data)
-                        with self.guard:
-                            self.counts[direction] += len(data)
-                except OSError:
-                    pass  # Reset/EOF is visible to the actual TLS peers.
-                finally:
-                    try:
-                        target.shutdown(socket.SHUT_WR)
-                    except OSError:
-                        pass
-            outbound = threading.Thread(target=pump, args=(client, server, 0), daemon=True)
-            outbound.start()
-            pump(server, client, 1)
-            outbound.join(timeout=121)
+                self.connections += 1
+            streams = [client, server]
+            pending = [bytearray(), bytearray()]
+            eof, finished = [False, False], [False, False]
+            # One owner closes each socket. Cross-thread close did not reliably
+            # wake a timed recv on macOS; cancellation now has a bounded poll.
+            while not cancelled.is_set():
+                for direction in range(2):
+                    if eof[direction] and not pending[direction] and not finished[direction]:
+                        streams[1 - direction].shutdown(socket.SHUT_WR)
+                        finished[direction] = True
+                if all(finished):
+                    break
+                readers = [streams[i] for i in range(2) if not eof[i] and len(pending[i]) < 65536]
+                writers = [streams[1 - i] for i in range(2) if pending[i]]
+                readable, writable, _ = select.select(readers, writers, [], .2)
+                for direction in range(2):
+                    source, target = streams[direction], streams[1 - direction]
+                    if source in readable:
+                        try:
+                            data = source.recv(65536 - len(pending[direction]))
+                            if data:
+                                pending[direction].extend(data)
+                            else:
+                                eof[direction] = True
+                        except BlockingIOError:
+                            pass
+                    if target in writable:
+                        try:
+                            count = target.send(pending[direction])
+                            if not count:
+                                return
+                            del pending[direction][:count]
+                            with self.guard:
+                                self.counts[direction] += count
+                        except BlockingIOError:
+                            pass
         except OSError:
             pass
         finally:
@@ -168,19 +207,14 @@ class Relay:
             if server is not None:
                 server.close()
             with self.guard:
-                self.sockets.discard(client); self.sockets.discard(server)
+                self.cancellations.discard(cancelled)
                 self.workers.discard(threading.current_thread())
 
     def partition(self):
         with self.guard:
             self.enabled = False
-            streams = list(self.sockets)
-        for stream in streams:
-            try:
-                stream.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            stream.close()
+            for cancelled in self.cancellations:
+                cancelled.set()
 
     def resume(self):
         with self.guard:
@@ -193,7 +227,12 @@ class Relay:
             workers = list(self.workers)
         for worker in workers:
             worker.join(timeout=5)
-        assert not self.thread.is_alive() and not any(w.is_alive() for w in workers), 'relay did not stop'
+        active = [worker for worker in [self.thread, *workers] if worker.is_alive()]
+        if active:
+            frames = sys._current_frames()
+            stacks = [''.join(traceback.format_stack(frames[worker.ident])) for worker in active
+                      if worker.ident in frames]
+            raise AssertionError('relay did not stop: ' + '\n'.join(stacks))
 
 
 class CliError(RuntimeError):

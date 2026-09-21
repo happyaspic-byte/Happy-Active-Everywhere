@@ -22,6 +22,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Install stable Rust
         shell: bash
         run: |
@@ -58,6 +61,21 @@ jobs:
       - name: Package content acceptance
         if: ${{ !cancelled() }}
         run: python scripts/verify-package.py
+      - name: Managed soak negative acceptance
+        if: ${{ success() }}
+        run: python -m unittest discover -s scripts -p test_soak.py -v
+      - name: Managed three-peer smoke
+        if: ${{ success() }}
+        shell: bash
+        run: python scripts/soak.py run --binary target/debug/everywhere${{ runner.os == 'Windows' && '.exe' || '' }} --work-dir "${{ runner.temp }}/managed-soak-${{ github.run_id }}-${{ github.run_attempt }}" --seconds 10 --min-cycles 2 --cycle-interval 0
+      - name: Upload managed soak summary
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-soak-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/managed-soak-${{ github.run_id }}-${{ github.run_attempt }}/summary.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Storage registration acceptance
         if: ${{ success() }}
         shell: bash

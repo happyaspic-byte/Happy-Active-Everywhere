@@ -41,6 +41,7 @@ everywhere manage --state /path/to/device-state --listen 127.0.0.1:7445
 [파일 안전성 보강 기록](docs/safety-hardening.md)은 손상된 보존본, 파일 권한, 파일명 별칭 잠금과 파일 반영 후 DB 기록 실패 시 재시작 검증을 설명합니다.
 [볼륨 장애 시험](docs/volume-faults.md)은 격리된 APFS 이미지의 실제 공간 부족·분리·읽기 전용 오류와 복구를 재현합니다.
 [파일시스템·NAS 검증](docs/storage-qualification.md)은 등록 전 안전성 검사와 실제 SMB 마운트에서 확인한 미지원 원인을 설명합니다. 해당 SMB 환경의 동기화는 아직 지원하지 않습니다.
+[지속 동기화 시험](docs/managed-soak.md)은 독립 관리 프로세스 3개의 충돌·삭제·재시작 재현과 실제 72시간 관측 절차를 설명합니다.
 [상태 백업·복구 안내](docs/state-backup.md)는 체크포인트 생성, 인덱스 복구와 재접속 절차를 설명합니다.
 [폴더 설계](docs/folder-sync-design.md), [관리 설계](docs/management-design.md),
 [기존 전송 알파 운영](docs/alpha-operations.md), [초기 실측](docs/verification.md)도 참고하세요.
