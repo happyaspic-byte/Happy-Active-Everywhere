@@ -21,6 +21,27 @@ struct ShareArgs {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Generate an offline backup key; print only its public age recipient.
+    DeviceKeygen {
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Encrypt a complete device snapshot; stop active services first.
+    DeviceBackup {
+        #[arg(long)]
+        state: PathBuf,
+        #[arg(long)]
+        recipient: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Verify/decrypt a backup and display its nonsecret contents summary.
+    DeviceInspect {
+        #[arg(long)]
+        backup: PathBuf,
+        #[arg(long)]
+        key: PathBuf,
+    },
     /// Register and control the current user's background synchronization service.
     Service {
         #[command(subcommand)]
@@ -341,6 +362,18 @@ async fn main() -> Result<()> {
         Command::ShareStatus(share) => {
             let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
             println!("{}", folder.status()?);
+        }
+        Command::DeviceKeygen { output } => println!("{}", everywhere::device::keygen(&output)?),
+        Command::DeviceBackup {
+            state,
+            recipient,
+            output,
+        } => println!(
+            "{}",
+            everywhere::device::backup(&state, &recipient, &output)?
+        ),
+        Command::DeviceInspect { backup, key } => {
+            println!("{}", everywhere::device::inspect(&backup, &key)?)
         }
         Command::ShareBackup { share, output } => {
             println!(

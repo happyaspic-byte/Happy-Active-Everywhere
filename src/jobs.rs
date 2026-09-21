@@ -31,7 +31,7 @@ pub struct Config {
     pub enabled: bool,
 }
 impl Config {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         for id in [&self.id, &self.folder] {
             ensure!(
                 !id.is_empty()

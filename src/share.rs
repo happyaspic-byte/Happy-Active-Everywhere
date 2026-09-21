@@ -55,7 +55,7 @@ pub struct Share {
     root: Root,
     _lock: File,
 }
-fn valid_id(id: &str) -> Result<()> {
+pub(crate) fn valid_id(id: &str) -> Result<()> {
     ensure!(
         !id.is_empty()
             && id.len() <= 64
@@ -109,6 +109,7 @@ fn read_config(directory: &Path) -> Result<Config> {
     Ok(config)
 }
 pub fn grant(state: &Path, id: &str, peer: &str, remove: bool) -> Result<()> {
+    let _device = crate::device::config_guard(state)?;
     identity::valid_peer(peer)?;
     if !remove {
         identity::Identity::new(state, peer)?;
@@ -153,6 +154,7 @@ pub(crate) fn check_access(state: &Path, id: &str, peer: &str, writing: bool) ->
 }
 impl Share {
     pub fn create(state: &Path, id: &str, root: &Path, mode: Mode) -> Result<Self> {
+        let _device = crate::device::config_guard(state)?;
         valid_id(id)?;
         let state = state.canonicalize()?;
         let root = root.canonicalize()?;

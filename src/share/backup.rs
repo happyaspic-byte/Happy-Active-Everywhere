@@ -235,6 +235,22 @@ pub fn create(state: &Path, id: &str, output: &Path) -> Result<serde_json::Value
                 .context("checkpoint requires a new directory name")?,
         );
     no_overlap(state, &output)?;
+    let objects = capture(&share, &output)?;
+    Ok(
+        serde_json::json!({"status":"checkpoint-complete","folder":id,"output":output,"objects":objects}),
+    )
+}
+
+pub(crate) fn verify(path: &Path) -> Result<Config> {
+    let (checkpoint, _) = open_checkpoint(path)?;
+    ensure!(
+        fs::read_dir(path.join("objects"))?.count() as u64 == checkpoint.objects,
+        "unexpected checkpoint objects"
+    );
+    Ok(checkpoint.config)
+}
+
+pub(crate) fn capture(share: &Share, output: &Path) -> Result<u64> {
     private_dir(&output).context("checkpoint destination must be new")?;
     private_dir(&output.join("objects"))?;
     let database = output.join("index.sqlite");
@@ -260,9 +276,7 @@ pub fn create(state: &Path, id: &str, output: &Path) -> Result<serde_json::Value
         &output.join("manifest.json"),
         &serde_json::to_vec_pretty(&manifest)?,
     )?;
-    Ok(
-        serde_json::json!({"status":"checkpoint-complete","folder":id,"output":output,"objects":objects}),
-    )
+    Ok(objects)
 }
 
 pub fn recover(state: &Path, id: &str, checkpoint: &Path) -> Result<serde_json::Value> {

@@ -64,6 +64,7 @@ fn regular_read(path: &Path) -> Result<Vec<u8>> {
     Ok(data)
 }
 pub fn trust(state: &Path, cert: &Path) -> Result<String> {
+    let _device = crate::device::config_guard(state)?;
     let der = regular_read(cert)?;
     let mut roots = RootCertStore::empty();
     roots.add(CertificateDer::from(der.clone()))?;
@@ -72,6 +73,7 @@ pub fn trust(state: &Path, cert: &Path) -> Result<String> {
     Ok(id)
 }
 pub fn revoke(state: &Path, peer: &str) -> Result<()> {
+    let _device = crate::device::config_guard(state)?;
     valid_peer(peer)?;
     fs::remove_file(state.join("peers").join(format!("{peer}.der")))?;
     Ok(())

@@ -13,5 +13,6 @@ pub mod sync;
 
 pub mod management;
 
+pub mod device;
 pub mod jobs;
 pub mod service;
