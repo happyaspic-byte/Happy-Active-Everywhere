@@ -180,7 +180,9 @@ async fn session<S: AsyncRead + AsyncWrite + Unpin>(
     let share = wire::work(stream, timing, move || {
         let share = Share::open(&state, &folder)?;
         share.authorize(&peer, false)?;
-        share.scan(false)?;
+        if !share.recovery_pending()? {
+            share.scan(false)?;
+        }
         share.begin_incoming()?;
         Ok(share)
     })
@@ -201,6 +203,10 @@ async fn session<S: AsyncRead + AsyncWrite + Unpin>(
             && remote.epoch.len() == 64
             && remote.sequence <= i64::MAX as u64,
         "invalid share handshake"
+    );
+    ensure!(
+        !share.recovery_pending()? || remote.mode != Mode::ReceiveOnly,
+        "state recovery requires a peer permitted to export full folder metadata"
     );
     if options.client {
         send_metadata(stream, &share, &local, &remote, &options.read).await?;

@@ -62,6 +62,20 @@ enum Command {
     },
     /// Inspect folder versions, pending deletions and the index epoch.
     ShareStatus(ShareArgs),
+    /// Save a verified folder-state checkpoint with all retained content objects.
+    ShareBackup {
+        #[command(flatten)]
+        share: ShareArgs,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Recover a folder index from a checkpoint without overwriting user files.
+    ShareRecover {
+        #[command(flatten)]
+        share: ShareArgs,
+        #[arg(long)]
+        backup: PathBuf,
+    },
     /// List concurrent revisions and their preserved content objects.
     ShareConflicts(ShareArgs),
     /// Choose a current conflict revision and propagate the resolution.
@@ -243,6 +257,18 @@ async fn main() -> Result<()> {
         Command::ShareStatus(share) => {
             let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
             println!("{}", folder.status()?);
+        }
+        Command::ShareBackup { share, output } => {
+            println!(
+                "{}",
+                everywhere::share::backup::create(&share.state, &share.folder, &output)?
+            );
+        }
+        Command::ShareRecover { share, backup } => {
+            println!(
+                "{}",
+                everywhere::share::backup::recover(&share.state, &share.folder, &backup)?
+            );
         }
         Command::ShareConflicts(share) => {
             let folder = everywhere::share::Share::open(&share.state, &share.folder)?;

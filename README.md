@@ -28,6 +28,7 @@ everywhere manage --state /path/to/device-state --listen 127.0.0.1:7445
 | SQLite 인덱스·마운트 확인·지속되는 삭제 승인 대기 | 구현·회귀 시험 |
 | 양방향 폴더 동기화·세 장비 오프라인 충돌 수렴 | 구현·세 OS 시험 |
 | 충돌 선택·로컬 이전 버전 복원·복원 내용 재전파 | 구현·실제 TLS 시험 |
+| 폴더 상태 백업·손상된 인덱스 복구·peer 전체 재조정 | 구현·CLI/TLS 및 중단 경계 시험 |
 | 로컬 관리 화면·토큰 인증·개별 삭제 검토·복구 | 구현·HTTP 및 실제 브라우저 시험 |
 | 백그라운드 작업·설치·업데이트·롤백 | 개발 중 |
 | 중앙 다중 사용자 관리·릴레이·NAT 자동 연결 | 제공하지 않음 |
@@ -37,6 +38,7 @@ everywhere manage --state /path/to/device-state --listen 127.0.0.1:7445
 [작업 및 검증 기록](docs/product-work.md)에서 실패한 회귀 시험과 수정 결과를 확인할 수 있습니다.
 [파일 안전성 보강 기록](docs/safety-hardening.md)은 손상된 보존본, 파일 권한, 파일명 별칭 잠금과 파일 반영 후 DB 기록 실패 시 재시작 검증을 설명합니다.
 [볼륨 장애 시험](docs/volume-faults.md)은 격리된 APFS 이미지의 실제 공간 부족·분리·읽기 전용 오류와 복구를 재현합니다.
+[상태 백업·복구 안내](docs/state-backup.md)는 체크포인트 생성, 인덱스 복구와 재접속 절차를 설명합니다.
 [폴더 설계](docs/folder-sync-design.md), [관리 설계](docs/management-design.md),
 [기존 전송 알파 운영](docs/alpha-operations.md), [초기 실측](docs/verification.md)도 참고하세요.
 초기 단일 파일·인덱싱 실측은 새 폴더 동기화 성능을 입증하지 않습니다.

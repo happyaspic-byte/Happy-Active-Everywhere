@@ -39,6 +39,16 @@ jobs:
       - name: Tests
         if: ${{ !cancelled() }}
         run: cargo test --locked --all-targets --no-fail-fast -- --nocapture
+      - name: Upload recovery failure evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovery-evidence-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            folder-report/recovery-evidence/
+            !folder-report/recovery-evidence/**/identity.key.der
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Installer acceptance
         if: ${{ !cancelled() }}
         shell: bash
@@ -88,7 +98,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: folder-measurements-${{ github.sha }}
-          path: folder-report/
+          path: folder-report/*.json
           if-no-files-found: warn
           retention-days: 14
       - name: Package verified release build

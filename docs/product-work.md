@@ -177,6 +177,43 @@ now explicitly selects the GPT whole device. Final qualification requires the
 complete corrected script, including exact pre-recovery causal-head comparison,
 to pass; earlier partial probes are not a five-scenario pass.
 
+The corrected script at `ab1e2ce` passed all five scenarios on the hosted Mac
+in workflow `35639125073`; all three OS jobs passed. Downloaded per-agent
+snapshots independently matched the pre-recovery causal heads. Local DiskImages
+utility operations remained stalled after the earlier partition-detach attempt;
+the five-scenario qualification is hosted Mac evidence, not a local completion.
+
+## Folder checkpoint and recovery — 2026-09-22
+
+`share-backup` and `share-recover` add consistent SQLite/content checkpoints,
+current-permission preservation, fresh epochs, retained old indexes and durable
+index/configuration publication. Restored receiving shares merge full remote
+metadata before scanning, so known bytes do not become invented local edits.
+The procedure and its exact boundaries are in [state-backup.md](state-backup.md).
+
+Independent review identified four gaps, each reproduced before correction:
+receive-only peers releasing the recovery hold; known nonselected conflict heads
+becoming phantom revisions; torn intent/configuration writes blocking recovery;
+and missing schema constraints being accepted. The fixes require an exporting
+peer, recognize every known pending head, atomically publish intent metadata,
+regenerate configuration scratch files, and validate the complete supported
+schema. Metadata length checks precede row deserialization.
+
+Local macOS verification passed 77 Rust tests (including ten CLI recovery
+scenarios and two recovery-publication unit tests), formatting, Clippy with
+warnings denied, and release compilation. The CLI scenarios use independent
+processes and actual TLS. Unix journal-write interruption uses a kernel file-size
+limit; the six publication-boundary fixtures are deterministic restart tests,
+not physical power-loss evidence. Windows database flushes use writable handles;
+the exact new head still requires all three hosted OS jobs before qualification.
+
+Design decisions: the checkpoint covers indexed folder state and retained
+objects; original credentials/current configuration are required. It preserves
+current authority, including send-only policy, rather than restoring old grants.
+Credentials/configuration disaster recovery, moving to another root/device,
+scheduling and UI integration remain separate work. No user state was restored
+during development; all mutations were isolated fixtures.
+
 These are same-host results, not physical-device or WAN measurements.
 [Safety details and commands](safety-hardening.md) describe the test boundary,
 upgrade requirements, and remaining filesystem/ACL limitations. The 100 GiB

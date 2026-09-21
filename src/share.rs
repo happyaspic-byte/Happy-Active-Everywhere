@@ -16,6 +16,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod backup;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -120,6 +122,10 @@ pub fn grant(state: &Path, id: &str, peer: &str, remove: bool) -> Result<()> {
         .open(directory.join("config.lock"))?;
     lock.try_lock_exclusive()
         .context("share configuration is busy")?;
+    ensure!(
+        !directory.join("state-recovery.json").try_exists()?,
+        "share state recovery must finish before changing folder grants"
+    );
     let mut config = read_config(&directory)?;
     if remove {
         config.peers.remove(peer);
@@ -208,12 +214,6 @@ impl Share {
     }
     pub fn open(state: &Path, id: &str) -> Result<Self> {
         let directory = directory(state, id)?;
-        let config = read_config(&directory)?;
-        ensure!(config.id == id, "share identifier mismatch");
-        ensure!(
-            config.identity == identity::fingerprint(&fs::read(state.join("identity.der"))?),
-            "share device identity changed"
-        );
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -222,6 +222,13 @@ impl Share {
             .open(directory.join("index.lock"))?;
         lock.try_lock_exclusive()
             .context("share is busy; retry after the active operation")?;
+        backup::resume(state, id, &directory)?;
+        let config = read_config(&directory)?;
+        ensure!(config.id == id, "share identifier mismatch");
+        ensure!(
+            config.identity == identity::fingerprint(&fs::read(state.join("identity.der"))?),
+            "share device identity changed"
+        );
         let db_path = directory.join("index.sqlite");
         ensure!(
             fs::symlink_metadata(&db_path)?.file_type().is_file(),
@@ -443,6 +450,28 @@ impl Share {
         Ok(Content::File(manifest.hash))
     }
     pub fn scan(&self, approve_deletes: bool) -> Result<ScanReport> {
+        ensure!(
+            !self.recovery_pending()?,
+            "restored state awaits full reconciliation with an approved peer; connect before scanning or approving deletions"
+        );
+        self.scan_inner(approve_deletes)
+    }
+    pub fn recovery_pending(&self) -> Result<bool> {
+        let value: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT value FROM meta WHERE key='recovery_pending'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match value.as_deref() {
+            None | Some("0") => Ok(false),
+            Some("1") => Ok(true),
+            _ => anyhow::bail!("invalid recovery state"),
+        }
+    }
+    fn scan_inner(&self, approve_deletes: bool) -> Result<ScanReport> {
         self.check_root()?;
         self.root.recover()?;
         self.connection.execute_batch("CREATE TEMP TABLE IF NOT EXISTS scan_seen(path TEXT PRIMARY KEY,alias TEXT UNIQUE NOT NULL,content TEXT NOT NULL); DELETE FROM scan_seen;")?;
@@ -488,16 +517,26 @@ impl Share {
                         && previous
                             .record
                             .versions
-                            .selected()
-                            .is_some_and(|r| &r.content == content)
+                            .heads
+                            .iter()
+                            .any(|r| &r.content == content)
                     {
                         // The filesystem publication completed before the index
                         // acknowledgement. Adopt it without inventing a local edit.
+                        let selected = previous
+                            .record
+                            .versions
+                            .selected()
+                            .is_some_and(|r| &r.content == content);
                         self.save(
                             path,
                             &previous.record.versions,
                             Some(content),
-                            &previous.record.versions,
+                            if selected {
+                                &previous.record.versions
+                            } else {
+                                &previous.observed
+                            },
                         )?;
                         continue;
                     }
@@ -628,7 +667,10 @@ impl Share {
         );
         // Capture changes made by applications during network transfer before
         // joining remote heads; they remain concurrent with the remote edits.
-        self.scan(false)?;
+        let recovering = self.recovery_pending()?;
+        if !recovering {
+            self.scan(false)?;
+        }
         let transaction = self.connection.unchecked_transaction()?;
         let mut after = String::new();
         loop {
@@ -659,7 +701,17 @@ impl Share {
         }
         self.connection.execute("DELETE FROM incoming", [])?;
         transaction.commit()?;
-        self.apply_pending(peer)
+        if recovering {
+            // Reconcile against authenticated remote heads before deciding
+            // whether current bytes are a new edit or an already known revision.
+            self.scan_inner(false)?;
+        }
+        self.apply_pending(peer)?;
+        if recovering {
+            self.connection
+                .execute("DELETE FROM meta WHERE key='recovery_pending'", [])?;
+        }
+        Ok(())
     }
     fn apply_pending(&self, peer: &str) -> Result<()> {
         loop {
@@ -840,7 +892,7 @@ impl Share {
                 .collect::<std::result::Result<_, _>>()?
         };
         Ok(
-            serde_json::json!({"folder":self.config.id,"root":self.config.root,"epoch":self.config.epoch,"sequence":self.sequence()?,"entries":entries,"pending_deletions":pending,"sqlite":rusqlite::version()}),
+            serde_json::json!({"folder":self.config.id,"root":self.config.root,"epoch":self.config.epoch,"sequence":self.sequence()?,"entries":entries,"pending_deletions":pending,"recovery_pending":self.recovery_pending()?,"sqlite":rusqlite::version()}),
         )
     }
     pub fn conflicts(&self) -> Result<serde_json::Value> {

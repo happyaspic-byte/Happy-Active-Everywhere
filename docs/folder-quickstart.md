@@ -83,6 +83,17 @@ A `.everywhere-folder` marker identifies the mounted data folder; missing or
 changed markers pause work instead of interpreting an unavailable mount as
 mass deletion.
 
+## State checkpoints and index recovery
+
+After a successful scan, use `share-backup --state STATE --folder personal
+--output NEW_DIRECTORY` to retain the indexed revisions, history, tombstones,
+pending deletion reviews and their content objects. `share-recover --state STATE
+--folder personal --backup DIRECTORY` restores a verified checkpoint with a
+fresh epoch, preserving current grants and visible files. Bidirectional and
+receive-only shares then require full reconciliation with an approved exporting
+peer. See [the backup/recovery procedure](state-backup.md) for runnable commands,
+interrupted-recovery behavior and device-disaster-recovery limitations.
+
 ## Current filesystem limits
 
 Symlinks, special files, non-UTF-8 names and names that cannot be safely shared
