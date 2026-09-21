@@ -43,6 +43,17 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python scripts/verify-install.py --binary target/debug/everywhere${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: Folder delta acceptance
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: python scripts/bench_folder.py --binary target/debug/everywhere --mib 8 --files 20 --report folder-report/delta.json --require-delta
+      - name: Upload folder measurements
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: folder-measurements-${{ github.sha }}
+          path: folder-report/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Browser acceptance
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         shell: bash

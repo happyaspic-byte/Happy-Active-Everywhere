@@ -112,3 +112,18 @@ Still pending: final all-green release/package run, service deployment details,
 large-folder memory/scan and delta-reuse optimization, broader filesystem
 fault/security coverage and the final independent branch review. Real devices,
 NAS, WAN and elapsed long-duration tests remain unavailable/unexecuted.
+
+## Complete package checkpoint
+
+`a10c8a0` / workflow run `35631315080`: **all three OS jobs succeeded**.
+Formatting, Clippy, Rust behavioral tests, actual-binary installation/update/
+rollback, release compilation and platform ZIP generation all passed.
+The Linux Chromium acceptance also passed. Ubuntu ran 51 Rust tests; Windows
+omits Unix-only tests. Windows's earlier installer failure was the PowerShell
+conversion of a null backup-path argument to an empty string; passing an
+explicit NullString fixed the observed atomic-replacement regression.
+
+This is a preserved, downloadable alpha checkpoint, not a claim of physical
+NAS/WAN or long-duration qualification. Additional tests now target large
+metadata pages, coexistence with the older restoration journal and measured
+wire-byte reduction after editing one block of a large file.

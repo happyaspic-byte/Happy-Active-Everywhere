@@ -454,3 +454,34 @@ fn revocation_after_metadata_staging_prevents_filesystem_application() {
     // Removing the folder grant must remain possible after global revocation.
     a.command("share-peer", &["--peer", &b.id, "--remove"]);
 }
+
+#[test]
+fn paged_metadata_and_nested_deletions_converge_without_missing_paths() {
+    let tmp = TempDir::new().unwrap();
+    let (a, b) = pair(tmp.path());
+    fs::create_dir_all(a.root.join("nested/inside")).unwrap();
+    for index in 0..270 {
+        fs::write(a.root.join(format!("nested/inside/file-{index:04}")), []).unwrap();
+    }
+    sync(&a, &b);
+    for index in 0..270 {
+        assert!(b.root.join(format!("nested/inside/file-{index:04}")).is_file());
+    }
+    fs::remove_dir_all(a.root.join("nested")).unwrap();
+    a.command("share-approve-deletes", &["--all"]);
+    sync(&a, &b);
+    assert!(!b.root.join("nested").exists());
+}
+
+#[test]
+fn folder_scans_remain_usable_after_legacy_file_restoration() {
+    let tmp = TempDir::new().unwrap();
+    let a = Node::new(tmp.path(), "a");
+    fs::write(a.root.join("note"), b"first").unwrap();
+    a.command("share-scan", &[]);
+    let previous = tmp.path().join("restore-source");
+    fs::write(&previous, b"restored through old CLI").unwrap();
+    everywhere::storage::restore(&previous, &a.root.join("note")).unwrap();
+    a.command("share-scan", &[]);
+    assert_eq!(fs::read(a.root.join("note")).unwrap(), b"restored through old CLI");
+}

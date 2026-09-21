@@ -122,6 +122,15 @@ fn management_requires_token_and_same_origin_and_registers_a_real_folder() {
     let json: Value = serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(json["folders"][0]["folder"], "photos");
     assert_eq!(json["folders"][0]["files"], 0);
+    let peer_state = temporary.path().join("peer-state");
+    let peer = identity::init(&peer_state).unwrap();
+    let certificate = fs::read(peer_state.join("identity.der")).unwrap();
+    let wrong = serde_json::json!({"action":"trust-peer","certificate":certificate,"expected":"0".repeat(64)}).to_string();
+    assert!(request(address, "POST", "/api/command", Some(token), None, &wrong).starts_with("HTTP/1.1 409"));
+    assert!(!state.join("peers").join(format!("{peer}.der")).exists());
+    let trust = serde_json::json!({"action":"trust-peer","certificate":certificate,"expected":peer}).to_string();
+    assert!(request(address, "POST", "/api/command", Some(token), None, &trust).starts_with("HTTP/1.1 200"));
+    assert!(state.join("peers").join(format!("{peer}.der")).is_file());
     fs::write(root.join("note.txt"), b"review deletion").unwrap();
     let scan = serde_json::json!({"action":"scan","folder":"photos"}).to_string();
     assert!(
