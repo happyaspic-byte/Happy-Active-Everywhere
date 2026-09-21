@@ -739,26 +739,45 @@ impl Share {
     }
     pub fn pending(&self) -> Result<serde_json::Value> {
         let mut statement = self.connection.prepare("SELECT e.path,e.versions FROM pending p JOIN entries e ON e.path=p.path ORDER BY e.path LIMIT 100")?;
-        let rows = statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        let entries = rows.map(|r| {
-            let (path, json) = r?;
-            let versions: Versions = serde_json::from_str(&json)?;
-            Ok(serde_json::json!({"path":path,"versions":versions}))
-        }).collect::<Result<Vec<_>>>()?;
+        let rows =
+            statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let entries = rows
+            .map(|r| {
+                let (path, json) = r?;
+                let versions: Versions = serde_json::from_str(&json)?;
+                Ok(serde_json::json!({"path":path,"versions":versions}))
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(serde_json::Value::Array(entries))
     }
     pub fn approve_deletion(&self, path: &str, expected: &Versions) -> Result<()> {
         validate_path(path)?;
         self.scan(false)?;
         let local = self.local(path)?.context("unknown deletion path")?;
-        let pending: bool = self.connection.query_row("SELECT EXISTS(SELECT 1 FROM pending WHERE path=?1)", [path], |r| r.get(0))?;
-        ensure!(pending && local.record.versions == *expected, "deletion review is stale; review the current state again");
+        let pending: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pending WHERE path=?1)",
+            [path],
+            |r| r.get(0),
+        )?;
+        ensure!(
+            pending && local.record.versions == *expected,
+            "deletion review is stale; review the current state again"
+        );
         self.check_root()?;
-        ensure!(self.root.content(path)?.is_none(), "local path reappeared after deletion review");
+        ensure!(
+            self.root.content(path)?.is_none(),
+            "local path reappeared after deletion review"
+        );
         let deletion = local.observed.edit(&self.replica(), Content::Deleted)?;
         let transaction = self.connection.unchecked_transaction()?;
-        self.save(path, &local.record.versions.join(&deletion)?, None, &deletion)?;
-        self.connection.execute("DELETE FROM pending WHERE path=?1", [path])?;
+        self.save(
+            path,
+            &local.record.versions.join(&deletion)?,
+            None,
+            &deletion,
+        )?;
+        self.connection
+            .execute("DELETE FROM pending WHERE path=?1", [path])?;
         transaction.commit()?;
         Ok(())
     }

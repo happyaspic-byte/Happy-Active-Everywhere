@@ -133,8 +133,14 @@ async fn status(State(app): State<Arc<App>>) -> Response {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 enum Operation {
-    Pending { folder: String },
-    ApproveDeletion { folder: String, path: String, expected: crate::model::Versions },
+    Pending {
+        folder: String,
+    },
+    ApproveDeletion {
+        folder: String,
+        path: String,
+        expected: crate::model::Versions,
+    },
     CreateFolder {
         folder: String,
         root: PathBuf,
@@ -170,8 +176,16 @@ async fn command(State(app): State<Arc<App>>, Json(operation): Json<Operation>) 
     outcome(
         match tokio::task::spawn_blocking(move || -> Result<Value> {
             match operation {
-            Operation::Pending { folder } => { return Share::open(&app.state, &folder)?.pending(); }
-            Operation::ApproveDeletion { folder, path, expected } => { Share::open(&app.state, &folder)?.approve_deletion(&path, &expected)?; }
+                Operation::Pending { folder } => {
+                    return Share::open(&app.state, &folder)?.pending();
+                }
+                Operation::ApproveDeletion {
+                    folder,
+                    path,
+                    expected,
+                } => {
+                    Share::open(&app.state, &folder)?.approve_deletion(&path, &expected)?;
+                }
                 Operation::CreateFolder { folder, root, mode } => {
                     Share::create(&app.state, &folder, &root, mode)?;
                 }
