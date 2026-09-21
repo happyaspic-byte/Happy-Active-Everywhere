@@ -284,8 +284,14 @@ caught credentials being publishable inside a source share; overlapping recovery
 workspaces are now refused. macOS path spelling in a test was corrected to use
 canonical paths, and Clippy's needless-borrow finding was removed.
 
-Independent review and exact-head three-OS delivery are still pending for this
-milestone. Hosted APFS acceptance now includes actual ENOSPC during device backup
-and recovery; this new acceptance has not yet run. No local DiskImages commands
+Independent review found and reproduced three defects: JSON-null materialization
+for approved tombstones, permissive temporary-directory modes, and dependence
+on access to old mount paths. Focused CLI regressions now pass after correction.
+The first delivery run 35657255386 passed Ubuntu; Windows exposed a Unix-only
+lint and the 270-file test harness deadline, and macOS saw an existing boundary
+test busy-lock failure. The latter was not reproduced in 25 local runs; that
+boundary test now runs in an isolated process. Exact-head three-OS delivery is
+still pending. Hosted APFS acceptance also includes actual ENOSPC during device
+backup and recovery; those new cases have not yet run. No local DiskImages commands
 were used. Full-product physical device/NAS/WAN, reboot/power-loss and soak gates
 remain open; the 100 GiB test is still deferred.

@@ -47,6 +47,8 @@ jobs:
           path: |
             folder-report/recovery-evidence/
             !folder-report/recovery-evidence/**/identity.key.der
+            !folder-report/recovery-evidence/**/*.agekey
+            !folder-report/recovery-evidence/**/*.age
           if-no-files-found: ignore
           retention-days: 14
       - name: Installer acceptance

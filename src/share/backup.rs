@@ -322,7 +322,9 @@ pub(crate) fn import(
     let mut statement = source.prepare("SELECT path,materialized FROM entries WHERE materialized IS NOT NULL AND path NOT IN (SELECT path FROM pending) ORDER BY length(path),path")?;
     for row in statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
         let (path, json) = row?;
-        let content: Content = serde_json::from_str(&json)?;
+        let Some(content): Option<Content> = serde_json::from_str(&json)? else {
+            continue;
+        };
         let object = match &content {
             Content::File(hash) => Some(directory.join("objects").join(hash)),
             _ => None,
@@ -557,6 +559,22 @@ mod tests {
 
     #[test]
     fn index_recovery_resumes_every_publication_boundary_without_double_displacement() {
+        // Keep this lifecycle test out of the process that concurrently spawns
+        // the file-size-limit child below. Process creation can briefly inherit
+        // unrelated open lock descriptors before close-on-exec takes effect.
+        if std::env::var_os("EVERYWHERE_TEST_RECOVERY_BOUNDARIES").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "share::backup::tests::index_recovery_resumes_every_publication_boundary_without_double_displacement", "--nocapture"])
+                .env("EVERYWHERE_TEST_RECOVERY_BOUNDARIES", "1")
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
         for boundary in 0..6 {
             let reports =
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("folder-report/recovery-evidence");

@@ -160,12 +160,7 @@ pub(super) fn decode(
         .map_err(|_| anyhow::anyhow!("invalid age X25519 identity file"))?;
     let decryptor = age::Decryptor::new(File::open(backup)?)?;
     let mut reader = decryptor.decrypt(std::iter::once(&key as &dyn age::Identity))?;
-    let mut builder = tempfile::Builder::new();
-    builder.prefix(".everywhere-decrypted-");
-    let staging = match parent {
-        Some(parent) => builder.tempdir_in(parent)?,
-        None => builder.tempdir()?,
-    };
+    let staging = staging(".everywhere-decrypted-", parent)?;
     let header = extract(&mut reader, staging.path())?;
     // Authentication at EOF precedes all SQLite parsing/materialization.
     header.summary(staging.path())?;

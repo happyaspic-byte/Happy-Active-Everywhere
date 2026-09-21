@@ -136,14 +136,29 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     sync_dir(path.parent().context("missing parent")?)
 }
 fn private_dir(path: &Path) -> Result<()> {
-    let mut builder = fs::DirBuilder::new();
+    let builder = fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let builder = {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = builder;
         builder.mode(0o700);
-    }
+        builder
+    };
     builder.create(path)?;
     sync_dir(path.parent().context("missing parent")?)
+}
+fn staging(prefix: &str, parent: Option<&Path>) -> Result<tempfile::TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(fs::Permissions::from_mode(0o700));
+    }
+    Ok(match parent {
+        Some(parent) => builder.tempdir_in(parent)?,
+        None => builder.tempdir()?,
+    })
 }
 fn new_output(path: &Path) -> Result<PathBuf> {
     let parent = path
@@ -253,9 +268,7 @@ pub fn backup(state: &Path, recipient: &str, output: &Path) -> Result<Value> {
         );
         shares.push(share);
     }
-    let staging = tempfile::Builder::new()
-        .prefix(".everywhere-backup-")
-        .tempdir_in(output.parent().unwrap())?;
+    let staging = staging(".everywhere-backup-", output.parent())?;
     private_dir(&staging.path().join("folders"))?;
     for share in &shares {
         share.scan(false)?;
@@ -285,19 +298,13 @@ pub fn recover(
     let parent = output.parent().unwrap();
     let (decoded, mut header) = archive::decode(backup, key, Some(parent))?;
     let summary = header.summary(decoded.path())?;
-    for config in summary["folders"]
-        .as_array()
-        .context("invalid folder summary")?
-    {
-        let config: share::Config = serde_json::from_value(config.clone())?;
-        // An old absolute path is provenance, never a write target. If it is
-        // still mounted here, do not publish credentials inside that share.
-        if config.root.is_absolute() && config.root.try_exists()? {
-            let root = config.root.canonicalize()?;
-            ensure!(
-                !output.starts_with(&root) && !root.starts_with(&output),
-                "recovery workspace must not overlap an original synchronized root"
-            );
+    // Inspect accessible destination ancestors, never historical roots. This
+    // also protects against nesting inside unrelated registered shares.
+    for ancestor in parent.ancestors() {
+        match fs::symlink_metadata(ancestor.join(".everywhere-folder")) {
+            Ok(_) => anyhow::bail!("recovery workspace must be outside synchronized roots"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         }
     }
     let old_identity = identity::fingerprint(&header.certificate);
@@ -307,9 +314,7 @@ pub fn recover(
             "retired device fingerprint does not match backup"
         );
     }
-    let workspace = tempfile::Builder::new()
-        .prefix(".everywhere-restore-")
-        .tempdir_in(parent)?;
+    let workspace = staging(".everywhere-restore-", Some(parent))?;
     let state = workspace.path().join("state");
     let identity = if retired_device.is_some() {
         private_dir(&state)?;

@@ -6,8 +6,51 @@ use std::{
     process::{Command, Output},
 };
 
+struct Evidence(Option<tempfile::TempDir>);
+impl Evidence {
+    fn new() -> Self {
+        let reports = Path::new(env!("CARGO_MANIFEST_DIR")).join("folder-report/recovery-evidence");
+        fs::create_dir_all(&reports).unwrap();
+        Self(Some(
+            tempfile::Builder::new()
+                .prefix("device-")
+                .tempdir_in(reports)
+                .unwrap(),
+        ))
+    }
+    fn path(&self) -> &Path {
+        self.0.as_ref().unwrap().path()
+    }
+}
+impl Drop for Evidence {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            if let Some(temp) = self.0.take() {
+                eprintln!("Device evidence retained at {}", temp.keep().display());
+            }
+        }
+    }
+}
+
 fn s(path: &Path) -> &str {
     path.to_str().unwrap()
+}
+fn cli() -> Command {
+    #[cfg(unix)]
+    {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "umask 000; exec \"$@\"",
+            "everywhere-test",
+            env!("CARGO_BIN_EXE_everywhere"),
+        ]);
+        command
+    }
+    #[cfg(not(unix))]
+    {
+        Command::new(env!("CARGO_BIN_EXE_everywhere"))
+    }
 }
 fn run(args: &[&str]) -> Output {
     use std::{
@@ -15,13 +58,13 @@ fn run(args: &[&str]) -> Output {
         thread,
         time::{Duration, Instant},
     };
-    let mut child = Command::new(env!("CARGO_BIN_EXE_everywhere"))
+    let mut child = cli()
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(120);
     while child.try_wait().unwrap().is_none() {
         if Instant::now() >= deadline {
             child.kill().unwrap();
@@ -118,7 +161,7 @@ fn exchange(a: &Path, aid: &str, b: &Path, bid: &str) {
 
 #[test]
 fn recovery_reconciles_newer_remote_deletion_then_syncs_both_directions() {
-    let base = tempfile::tempdir().unwrap();
+    let base = Evidence::new();
     let a = base.path().join("a");
     let b = base.path().join("b");
     let ar = base.path().join("a-files");
@@ -142,7 +185,7 @@ fn recovery_reconciles_newer_remote_deletion_then_syncs_both_directions() {
     fs::write(ar.join("later-deleted"), b"must not resurrect").unwrap();
     fs::write(ar.join("note"), b"baseline").unwrap();
     exchange(&a, &aid, &b, &bid);
-    let key = base.path().join("offline-key");
+    let key = base.path().join("offline-key.agekey");
     let recipient = json(&["device-keygen", "--output", s(&key)])["recipient"]
         .as_str()
         .unwrap()
@@ -233,7 +276,7 @@ fn interrupted_device_operations_publish_nothing_and_retry_safely() {
         thread,
         time::{Duration, Instant},
     };
-    let base = tempfile::tempdir().unwrap();
+    let base = Evidence::new();
     let state = base.path().join("state");
     let root = base.path().join("files");
     fs::create_dir(&root).unwrap();
@@ -255,7 +298,7 @@ fn interrupted_device_operations_publish_nothing_and_retry_safely() {
     file.sync_all().unwrap();
     drop(file);
     let original = sha(&payload);
-    let key = base.path().join("key");
+    let key = base.path().join("key.agekey");
     let recipient = json(&["device-keygen", "--output", s(&key)])["recipient"]
         .as_str()
         .unwrap()
@@ -285,7 +328,7 @@ fn interrupted_device_operations_publish_nothing_and_retry_safely() {
         (&restore_args[..], ".everywhere-restore-", &workspace),
     ] {
         let log = base.path().join("interrupted.stderr");
-        let mut child = Command::new(env!("CARGO_BIN_EXE_everywhere"))
+        let mut child = cli()
             .args(args)
             .stdout(Stdio::null())
             .stderr(fs::File::create(&log).unwrap())
@@ -316,6 +359,24 @@ fn interrupted_device_operations_publish_nothing_and_retry_safely() {
         }
         child.kill().unwrap();
         child.wait().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for entry in fs::read_dir(base.path()).unwrap() {
+                let entry = entry.unwrap();
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".everywhere-")
+                    && entry.file_type().unwrap().is_dir()
+                {
+                    assert_eq!(
+                        entry.metadata().unwrap().permissions().mode() & 0o777,
+                        0o700
+                    );
+                }
+            }
+        }
         assert!(!output.exists(), "interrupted operation published output");
         assert_eq!(sha(&payload), original);
         ok(args);
@@ -325,7 +386,7 @@ fn interrupted_device_operations_publish_nothing_and_retry_safely() {
 
 #[test]
 fn encrypted_capture_authenticates_and_refuses_replacement() {
-    let base = tempfile::tempdir().unwrap();
+    let base = Evidence::new();
     let state = base.path().join("state");
     let root = base.path().join("files");
     fs::create_dir(&root).unwrap();
@@ -341,7 +402,7 @@ fn encrypted_capture_authenticates_and_refuses_replacement() {
     ]);
     fs::write(root.join("비밀.txt"), b"private payload after registration").unwrap();
     let before = sha(&root.join("비밀.txt"));
-    let key = base.path().join("offline-key.txt");
+    let key = base.path().join("offline-key.agekey");
     let recipient = json(&["device-keygen", "--output", s(&key)])["recipient"]
         .as_str()
         .unwrap()
@@ -375,7 +436,7 @@ fn encrypted_capture_authenticates_and_refuses_replacement() {
     let digest = sha(&backup);
     reject(&args);
     assert_eq!(sha(&backup), digest);
-    let wrong = base.path().join("wrong-key.txt");
+    let wrong = base.path().join("wrong-key.agekey");
     ok(&["device-keygen", "--output", s(&wrong)]);
     reject(&["device-inspect", "--backup", s(&backup), "--key", s(&wrong)]);
     let broken = base.path().join("broken.age");
@@ -403,7 +464,7 @@ fn encrypted_capture_authenticates_and_refuses_replacement() {
 #[test]
 fn encrypted_capture_rejects_busy_or_missing_roots() {
     use fs2::FileExt;
-    let base = tempfile::tempdir().unwrap();
+    let base = Evidence::new();
     let state = base.path().join("state");
     let root = base.path().join("files");
     fs::create_dir(&root).unwrap();
@@ -417,7 +478,7 @@ fn encrypted_capture_rejects_busy_or_missing_roots() {
         "--root",
         s(&root),
     ]);
-    let key = base.path().join("key");
+    let key = base.path().join("key.agekey");
     let recipient = json(&["device-keygen", "--output", s(&key)])["recipient"]
         .as_str()
         .unwrap()
@@ -456,7 +517,7 @@ fn encrypted_capture_rejects_busy_or_missing_roots() {
 
 #[test]
 fn recovery_preserves_content_history_pending_deletes_and_quarantines_authority() {
-    let base = tempfile::tempdir().unwrap();
+    let base = Evidence::new();
     let state = base.path().join("state");
     let root = base.path().join("files");
     let other = base.path().join("other");
@@ -494,10 +555,20 @@ fn recovery_preserves_content_history_pending_deletes_and_quarantines_authority(
     fs::create_dir(root.join("empty")).unwrap();
     fs::write(root.join("비밀.txt"), b"old version").unwrap();
     fs::write(root.join("pending"), b"pending-delete contents").unwrap();
+    fs::write(root.join("approved-gone"), b"deleted before backup").unwrap();
     ok(&["share-scan", "--state", s(&state), "--folder", "personal"]);
+    fs::remove_file(root.join("approved-gone")).unwrap();
+    ok(&[
+        "share-approve-deletes",
+        "--state",
+        s(&state),
+        "--folder",
+        "personal",
+        "--all",
+    ]);
     fs::write(root.join("비밀.txt"), b"new version").unwrap();
     fs::remove_file(root.join("pending")).unwrap();
-    let key = base.path().join("key");
+    let key = base.path().join("key.agekey");
     let recipient = json(&["device-keygen", "--output", s(&key)])["recipient"]
         .as_str()
         .unwrap()
@@ -550,6 +621,7 @@ fn recovery_preserves_content_history_pending_deletes_and_quarantines_authority(
     assert_eq!(sha(&restored_root.join("비밀.txt")), payload_hash);
     assert!(restored_root.join("empty").is_dir());
     assert!(!restored_root.join("pending").exists());
+    assert!(!restored_root.join("approved-gone").exists());
     assert_eq!(
         fs::read_dir(restored_state.join("peers")).unwrap().count(),
         0
@@ -666,5 +738,101 @@ fn recovery_preserves_content_history_pending_deletes_and_quarantines_authority(
     assert_eq!(
         sha(&replacement.join("state/identity.key.der")),
         sha(&base.path().join("retired-state/identity.key.der"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_workspace_is_private_under_permissive_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = Evidence::new();
+    let state = base.path().join("state");
+    ok(&["init", "--state", s(&state)]);
+    let key = base.path().join("key.agekey");
+    let recipient = json(&["device-keygen", "--output", s(&key)])["recipient"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let backup = base.path().join("backup.age");
+    ok(&[
+        "device-backup",
+        "--state",
+        s(&state),
+        "--recipient",
+        &recipient,
+        "--output",
+        s(&backup),
+    ]);
+    let output = base.path().join("recovered");
+    ok(&[
+        "device-recover",
+        "--backup",
+        s(&backup),
+        "--key",
+        s(&key),
+        "--output",
+        s(&output),
+    ]);
+    assert_eq!(
+        fs::metadata(output).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn recovery_does_not_require_access_to_historical_mount_ancestry() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = Evidence::new();
+    let state = base.path().join("state");
+    let mount = base.path().join("old-mount");
+    let root = mount.join("files");
+    fs::create_dir_all(&root).unwrap();
+    ok(&["init", "--state", s(&state)]);
+    ok(&[
+        "share-init",
+        "--state",
+        s(&state),
+        "--folder",
+        "personal",
+        "--root",
+        s(&root),
+    ]);
+    fs::write(root.join("file"), b"independent backup").unwrap();
+    let key = base.path().join("key.agekey");
+    let recipient = json(&["device-keygen", "--output", s(&key)])["recipient"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let backup = base.path().join("backup.age");
+    ok(&[
+        "device-backup",
+        "--state",
+        s(&state),
+        "--recipient",
+        &recipient,
+        "--output",
+        s(&backup),
+    ]);
+    fs::set_permissions(&mount, fs::Permissions::from_mode(0o0)).unwrap();
+    let output = base.path().join("recovered");
+    let result = run(&[
+        "device-recover",
+        "--backup",
+        s(&backup),
+        "--key",
+        s(&key),
+        "--output",
+        s(&output),
+    ]);
+    fs::set_permissions(&mount, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        sha(&output.join("folders/personal/file")),
+        format!("{:x}", Sha256::digest(b"independent backup"))
     );
 }

@@ -22,7 +22,9 @@ fn run(args: &[&str]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(20);
+    // Hosted Windows needs time for hundreds of durable creates/deletions.
+    // Keep a bounded test deadline longer than the protocol's progress timeout.
+    let deadline = Instant::now() + Duration::from_secs(90);
     while child.try_wait().unwrap().is_none() {
         if Instant::now() >= deadline {
             let _ = child.kill();

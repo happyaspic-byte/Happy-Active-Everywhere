@@ -86,8 +86,8 @@ published. The boundary fixtures reopen real state; they are deterministic
 interruption-state tests, not a claim of physical power-loss testing.
 
 Information absent from every surviving checkpoint and peer cannot be recovered
-from an index. Recovery after loss of the device credentials/configuration,
-restoring to a different root/device, backup scheduling, encryption, and a web
-backup/recovery workflow remain separate product work. Original transfer-file
+from an index. For credential/configuration loss or a different device/root,
+use [encrypted whole-device recovery](device-backup.md). Backup scheduling and
+a web backup/recovery workflow remain separate product work. Original transfer-file
 journals outside the folder index are not copied by this command. Physical
 devices, NAS/WAN and elapsed long-duration qualification remain unverified.

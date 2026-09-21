@@ -43,17 +43,17 @@ returning `Result<Value>`. Expose crate-only `share::backup::capture(&Share,path
 and `verify(path)->Config`; `device::config_guard(state)` returns a held shared
 file lock. Archive decode returns a private TempDir plus validated header.
 
-- [ ] Write CLI tests with a file changed after the last scan: keygen, backup,
+- [x] Write CLI tests with a file changed after the last scan: keygen, backup,
   inspect, SHA-256 original source preservation, ciphertext without plaintext
   certificate/key/content, wrong key/truncation/tamper rejected, existing outputs
   preserved, source share/service locks rejected. Execute
   `cargo test --test device encrypted_capture`; expected missing-command RED.
-- [ ] Implement bounded header/entry encoding, authenticated full decode, age
+- [x] Implement bounded header/entry encoding, authenticated full decode, age
   recipient-only encryption and private no-clobber output. Refactor existing
   checkpoint creation into capture plus CLI wrapper. Add configuration guards.
   Exact record sequence is `u32be path_len, path, u64be len, bytes`; path_len zero
   terminates and the next read must return authenticated EOF.
-- [ ] Run `cargo test --test device encrypted_capture`; expected GREEN. Run
+- [x] Run `cargo test --test device encrypted_capture`; expected GREEN. Run
   `cargo test --locked --all-targets`; expected complete green suite; commit.
 
 ## Task 2: Recovery and authority activation
@@ -67,18 +67,18 @@ Interfaces: consume Task 1 decoded header/checkpoints; produce
 `share::backup::import(checkpoint,new_state,staged_root,final_root)` materializes
 the checkpoint under a fresh marker/epoch, empty grants, receive-only and hold.
 
-- [ ] Add tests recovering Unicode file, empty directory, modified retained
+- [x] Add tests recovering Unicode file, empty directory, modified retained
   history and a pending deletion. Assert new identity, empty peers, disabled
   jobs and remapped roots; default activation fails before reconcile. Run
   `cargo test --test device recovery`; expected missing-command RED.
-- [ ] Import only validated checkpoint materialized bytes excluding pending
+- [x] Import only validated checkpoint materialized bytes excluding pending
   deletions; copy all objects/history. Write new configs and recovery report,
   publish whole private workspace atomically without replacement. Add explicit
   retired-identity matching and activation using original recorded mode.
-- [ ] Add real TCP/TLS test: A backs up; B later approves deletion; recover C,
+- [x] Add real TCP/TLS test: A backs up; B later approves deletion; recover C,
   enroll B/C, full exchange, assert no resurrection by independent SHA-256 and
   file sets; activate then verify C edit reaches B and reverse edit reaches C.
-- [ ] Run `cargo test --test device` and full Rust suite; expected GREEN; commit.
+- [x] Run `cargo test --test device` and full Rust suite; expected GREEN; commit.
 
 ## Task 3: Faults, review and delivery
 
@@ -87,11 +87,11 @@ Files: device regressions, docs/device-backup.md, README, docs/product-work.md.
 Interfaces: consumes public CLI and staged publication; produces reproducible
 operator walkthrough, review corrections and exact-head three-OS CI evidence.
 
-- [ ] Add authenticated malicious stream tests (path/duplicate/schema/hash),
+- [x] Add authenticated malicious stream tests (path/duplicate/schema/hash),
   no-replace race and interrupted publication tests. Test production paths with
   owned fixture barriers, not environment-triggered production fault injection.
   Run focused regressions RED then fix and verify GREEN.
-- [ ] Write runnable backup/recover/enrollment/activation instructions; explain
+- [x] Write runnable backup/recover/enrollment/activation instructions; explain
   private key custody, restore quarantine, old identity retirement and leftovers.
 - [ ] Run format, Clippy, all tests and obtain one independent final review.
   Important findings require reproduction/fix and affected/full verification.
