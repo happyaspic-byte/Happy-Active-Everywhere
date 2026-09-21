@@ -39,6 +39,21 @@ jobs:
       - name: Tests
         if: ${{ !cancelled() }}
         run: cargo test --locked --all-targets --no-fail-fast -- --nocapture
+      - name: Browser acceptance
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          npm install --prefix "$RUNNER_TEMP/everywhere-browser" --no-save --ignore-scripts playwright@1.62.1
+          node "$RUNNER_TEMP/everywhere-browser/node_modules/playwright/cli.js" install --with-deps chromium
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/everywhere-browser/node_modules/playwright" node scripts/verify-browser.cjs
+      - name: Upload browser evidence
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-evidence-${{ github.sha }}
+          path: browser-report/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Release build
         run: cargo build --release --locked
       - name: Upload binary and verification documents

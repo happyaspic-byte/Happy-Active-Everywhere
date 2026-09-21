@@ -56,6 +56,21 @@ async function refresh() {
     }
     const actions = el('div', undefined, 'actions');
     actions.append(action('변경 재검사', async () => { const result = await command({action:'scan',folder:folder.folder}); message(`${result.changed}개 변경 기록 · ${result.pending_deletions}개 삭제 승인 대기`); await refresh(); }));
+    actions.append(action('삭제 승인 검토', async () => {
+      const pending = await command({action:'pending',folder:folder.folder});
+      $('details').hidden = false; $('detail-title').textContent = `${folder.folder} · 삭제 승인 대기`; $('detail-content').replaceChildren();
+      if (!pending.length) $('detail-content').append(el('p','승인을 기다리는 삭제가 없습니다.','muted'));
+      for (const entry of pending) {
+        const row = el('div',undefined,'revision'); row.append(el('strong',entry.path),el('small','최대 100개씩 표시됩니다. 승인한 삭제는 다음 동기화에서 다른 장비에도 적용됩니다.'));
+        row.append(action('이 삭제 승인',async()=>{
+          if(!window.confirm(`${entry.path} 삭제를 연결된 장비에 전파할까요? 이전 파일 내용은 복구 이력에 남습니다.`)) return;
+          await command({action:'approve-deletion',folder:folder.folder,path:entry.path,expected:entry.versions});
+          row.remove(); await refresh(); message('선택한 삭제를 승인했습니다.');
+        }));
+        $('detail-content').append(row);
+      }
+      $('details').scrollIntoView({behavior:'smooth'});
+    }));
     actions.append(action('충돌 확인', async () => {
       const conflicts = await command({action:'conflicts',folder:folder.folder});
       $('details').hidden = false; $('detail-title').textContent = `${folder.folder} · 충돌`; $('detail-content').replaceChildren();
