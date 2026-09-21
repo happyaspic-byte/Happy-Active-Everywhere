@@ -283,7 +283,7 @@ class Controller:
         objects = node.state / 'shares' / FOLDER / 'objects'
         assert not any(parent.is_symlink() for parent in
                        [node.base, node.state, node.state / 'shares', objects.parent, objects])
-        assert path.parent.resolve() == objects.resolve() and not path.is_symlink(), 'unsafe object reference'
+        assert path.parent.samefile(objects) and not path.is_symlink(), 'unsafe object reference'
         observed = sha256(path)
         assert digest is None or observed == digest, 'preserved object differs from expected bytes'
         digest = observed

@@ -1,5 +1,11 @@
 # Managed Soak Implementation Plan
 
+**Superseded scope (2026-09-22):** The user stopped qualification testing and
+requested a usable central web management product. No 72-hour, seven-day,
+100 GiB, many-small-file or Resilio comparison run is required or underway.
+Previously collected results and scripts remain available for user-run testing.
+Unexecuted qualification steps below are historical plans, not passing results.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans
 > inline, with one fresh independent whole-change review before starting 72 hours.
 

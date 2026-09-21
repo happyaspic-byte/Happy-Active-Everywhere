@@ -1,3 +1,11 @@
+# Current direction — central web management (2026-09-22)
+
+The user now owns functional and performance acceptance. Development focuses on
+a usable central console with enrolled agents, remote folder deployment and
+existing sync-engine controls. CI compiles, lints and packages the three OS
+binaries; it no longer runs acceptance, soak, volume-fault or benchmark suites.
+Historical results below do not certify the new central-management code.
+
 # Product implementation ledger
 
 Base: `6235caf7818007fccd1eef79174d89982f9d9aa6`.

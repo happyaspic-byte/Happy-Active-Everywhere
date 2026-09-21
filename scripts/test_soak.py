@@ -273,6 +273,31 @@ class ControllerTests(unittest.TestCase):
             seconds=1, min_cycles=1, cycle_interval=0, max_bytes=4 * 1024**3,
             reserve_bytes=0))
 
+    def test_api_object_paths_use_directory_identity_and_reject_outside_copies(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            controller = self.controller(Path(temporary) / 'run')
+            node = Node(self.binary, controller.root, 'a')
+            payload = b'known object through public history API'
+            digest = hashlib.sha256(payload).hexdigest()
+            try:
+                node.start()
+                (node.root / 'note').write_bytes(payload)
+                node.api({'action': 'scan', 'folder': 'soak'})
+                row, = node.api({'action': 'history', 'folder': 'soak', 'path': 'note'})
+                api_path = Path(row['object_path'])
+                # Rust's Windows API uses an extended-length canonical path.
+                self.assertEqual(controller.remember(node, api_path, digest), digest)
+                alias = api_path.parent.with_name(api_path.parent.name.upper()) / api_path.name
+                if alias.exists():  # Exercise an actual alias on case-insensitive filesystems.
+                    self.assertTrue(alias.parent.samefile(api_path.parent))
+                    self.assertEqual(controller.remember(node, alias, digest), digest)
+                outside = controller.root / 'outside'; outside.mkdir()
+                copied = outside / api_path.name; copied.write_bytes(payload)
+                with self.assertRaises(AssertionError):
+                    controller.remember(node, copied, digest)
+            finally:
+                node.stop(); controller.event_stream.close(); controller.lock.close()
+
     def test_optimization_flags_are_rejected_before_workspace_creation(self):
         with tempfile.TemporaryDirectory() as temporary:
             for flag, environment in [(['-O'], {}), ([], {'PYTHONOPTIMIZE': '1'})]:
