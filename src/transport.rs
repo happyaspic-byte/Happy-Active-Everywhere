@@ -88,31 +88,58 @@ struct Blocks<'a> {
     delay: Duration,
 }
 
-async fn send_blocks<S>(stream: &mut S, blocks: Blocks<'_>, check: impl Fn() -> Result<()>) -> Result<()>
+async fn send_blocks<S>(
+    stream: &mut S,
+    blocks: Blocks<'_>,
+    check: impl Fn() -> Result<()>,
+) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let timing = Timing::default();
-    let mut source = File::open(blocks.source)?;
-    let mut buffer = vec![0; crate::storage::BLOCK_SIZE];
-    for index in blocks.missing {
-        check()?;
-        let len = block_len(blocks.manifest, *index)?;
-        source.seek(SeekFrom::Start(index * crate::storage::BLOCK_SIZE as u64))?;
-        source.read_exact(&mut buffer[..len])?;
-        ensure!(blake3::hash(&buffer[..len]).to_hex().as_str() == blocks.manifest.blocks[*index as usize], "source changed during transfer");
-        timeout(timing.io, async {
-            stream.write_u64(*index).await?;
-            stream.write_all(&buffer[..len]).await?;
-            stream.flush().await
-        }).await??;
-        let acknowledged: u64 = wire::read(stream, timing).await?;
-        ensure!(acknowledged == *index, "unexpected acknowledgement");
-        eprintln!("BLOCK {index}");
-        if !blocks.delay.is_zero() {
-            tokio::time::sleep(blocks.delay).await;
+    // Keep at most 16 MiB awaiting durable acknowledgement. Pacing retains the
+    // single-block contract used for deliberate interruption and recovery.
+    let window = tokio::sync::Semaphore::new(if blocks.delay.is_zero() { 16 } else { 1 });
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    let sending = async {
+        let mut source = File::open(blocks.source)?;
+        let mut buffer = vec![0; crate::storage::BLOCK_SIZE];
+        for index in blocks.missing {
+            window.acquire().await?.forget();
+            check()?;
+            let len = block_len(blocks.manifest, *index)?;
+            source.seek(SeekFrom::Start(index * crate::storage::BLOCK_SIZE as u64))?;
+            source.read_exact(&mut buffer[..len])?;
+            ensure!(
+                blake3::hash(&buffer[..len]).to_hex().as_str()
+                    == blocks.manifest.blocks[*index as usize],
+                "source changed during transfer"
+            );
+            // The concurrent ACK reader enforces peer inactivity while this
+            // write can be backpressured by a slow, heartbeating disk worker.
+            timeout(timing.operation, async {
+                writer.write_u64(*index).await?;
+                writer.write_all(&buffer[..len]).await?;
+                writer.flush().await
+            })
+            .await??;
+            if !blocks.delay.is_zero() {
+                tokio::time::sleep(blocks.delay).await;
+            }
         }
-    }
+        Ok::<(), anyhow::Error>(())
+    };
+    let receiving = async {
+        for index in blocks.missing {
+            let acknowledged: u64 = wire::read(&mut reader, timing).await?;
+            check()?;
+            ensure!(acknowledged == *index, "unexpected acknowledgement");
+            window.add_permits(1);
+            eprintln!("BLOCK {index}");
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+    tokio::try_join!(sending, receiving)?;
     Ok(())
 }
 
@@ -131,27 +158,52 @@ pub async fn send(
     let mut stream = timeout(
         timing.io,
         TlsConnector::from(identity.client()?).connect("everywhere.local".try_into()?, tcp),
-    ).await??;
+    )
+    .await??;
     identity.check(stream.get_ref().1.peer_certificates())?;
-    ensure!(stream.get_ref().1.alpn_protocol() == Some(PROTOCOL), "protocol mismatch");
+    ensure!(
+        stream.get_ref().1.alpn_protocol() == Some(PROTOCOL),
+        "protocol mismatch"
+    );
     let certificates = stream.get_ref().1.peer_certificates().unwrap().to_vec();
     wire::send(&mut stream, &manifest, timing).await?;
     let missing: Vec<u64> = wire::read(&mut stream, timing).await?;
-    ensure!(missing.len() <= manifest.blocks.len(), "too many requested blocks");
-    ensure!(missing.windows(2).all(|p| p[0] < p[1]), "block requests must be unique and ordered");
-    send_blocks(&mut stream, Blocks {
-        source, manifest: &manifest, missing: &missing, delay: Duration::from_millis(block_delay_ms),
-    }, || identity.check(Some(&certificates))).await?;
+    ensure!(
+        missing.len() <= manifest.blocks.len(),
+        "too many requested blocks"
+    );
+    ensure!(
+        missing.windows(2).all(|p| p[0] < p[1]),
+        "block requests must be unique and ordered"
+    );
+    send_blocks(
+        &mut stream,
+        Blocks {
+            source,
+            manifest: &manifest,
+            missing: &missing,
+            delay: Duration::from_millis(block_delay_ms),
+        },
+        || identity.check(Some(&certificates)),
+    )
+    .await?;
     let source = source.to_owned();
     let expected = manifest.clone();
     wire::work(&mut stream, timing, move || {
-        ensure!(Manifest::from_path(&source)? == expected, "source changed before commit");
+        ensure!(
+            Manifest::from_path(&source)? == expected,
+            "source changed before commit"
+        );
         Ok(())
-    }).await?;
+    })
+    .await?;
     wire::send(&mut stream, "commit", timing).await?;
     let result: String = wire::read(&mut stream, timing).await?;
     ensure!(result == "complete", "receiver did not complete");
-    println!("{}", serde_json::json!({"status":"complete","tls":"TLSv1_3","protocol":2,"sent_blocks":missing.len(),"reused_blocks":manifest.blocks.len()-missing.len(),"bytes":manifest.size,"hash":manifest.hash}));
+    println!(
+        "{}",
+        serde_json::json!({"status":"complete","tls":"TLSv1_3","protocol":2,"sent_blocks":missing.len(),"reused_blocks":manifest.blocks.len()-missing.len(),"bytes":manifest.size,"hash":manifest.hash})
+    );
     Ok(())
 }
 
@@ -180,11 +232,22 @@ mod tests {
             }
             Ok::<(), anyhow::Error>(())
         };
-        let send = send_blocks(&mut sender, Blocks {
-            source: &source, manifest: &manifest, missing: &[0, 1], delay: Duration::ZERO,
-        }, || Ok(()));
+        let send = send_blocks(
+            &mut sender,
+            Blocks {
+                source: &source,
+                manifest: &manifest,
+                missing: &[0, 1],
+                delay: Duration::ZERO,
+            },
+            || Ok(()),
+        );
         // Bound the whole scenario; a stop-and-wait sender deadlocks here.
-        let (sent, received) = timeout(Duration::from_secs(5), async { tokio::join!(send, receive) }).await.unwrap();
+        let (sent, received) = timeout(Duration::from_secs(5), async {
+            tokio::join!(send, receive)
+        })
+        .await
+        .unwrap();
         received.unwrap();
         sent.unwrap();
     }

@@ -90,7 +90,8 @@ where
                 _ = ticks.tick() => packet::<_, ()>(stream, &Packet::Busy, timing).await?,
             }
         }
-    }).await?
+    })
+    .await?
 }
 
 #[cfg(test)]
