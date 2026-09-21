@@ -1,0 +1,24 @@
+{
+  "scope": "same-host loopback, two independent CLI processes",
+  "cache": "uncontrolled/warm source; no cache purge",
+  "gib": 10,
+  "bytes": 10737418240,
+  "source_write_fsync_seconds": 4.836482707993127,
+  "source_sha256_seconds": 5.882590792025439,
+  "transfer_wall_seconds_including_hashes": 130.58163445803802,
+  "mib_per_second": 78.41837822370488,
+  "sender_max_rss_bytes": 6553600,
+  "source_sha256": "91f2ba191af80a72e75595bb4f4b1e5f50a6e0368b356f289829c9b31c382b45",
+  "destination_sha256": "91f2ba191af80a72e75595bb4f4b1e5f50a6e0368b356f289829c9b31c382b45",
+  "mismatches": 0,
+  "cli": {
+    "bytes": 10737418240,
+    "hash": "897a3b7d5a0473091fe9a1edf718b0bfaafeef516c710600349a61ccf634bf3a",
+    "reused_blocks": 0,
+    "sent_blocks": 10240,
+    "status": "complete",
+    "tls": "TLSv1_3"
+  },
+  "network_ceiling": "unmeasured",
+  "real_devices": "unverified"
+}
