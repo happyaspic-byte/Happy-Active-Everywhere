@@ -169,6 +169,67 @@ fn head_state(node: &Node, path: &str) -> Value {
 }
 
 #[test]
+fn rejected_share_roots_do_not_reserve_ids_or_block_other_registrations() {
+    for marked in [false, true] {
+        let tmp = TempDir::new().unwrap();
+        let state = tmp.path().join("state");
+        identity::init(&state).unwrap();
+        let root = tmp.path().join("rejected");
+        let sentinel = b"existing content must survive registration";
+        if marked {
+            fs::create_dir(&root).unwrap();
+            fs::write(root.join(".everywhere-folder"), sentinel).unwrap();
+        } else {
+            fs::write(&root, sentinel).unwrap();
+        }
+        let result = run(&[
+            "share-init",
+            "--state",
+            s(&state),
+            "--folder",
+            "retry",
+            "--root",
+            s(&root),
+        ]);
+        assert!(!result.status.success());
+        assert_eq!(
+            fs::read(if marked {
+                root.join(".everywhere-folder")
+            } else {
+                root.clone()
+            })
+            .unwrap(),
+            sentinel
+        );
+        assert!(
+            !state.join("shares/retry").exists(),
+            "rejected root reserved a broken share and blocked later registrations"
+        );
+        for id in ["unrelated", "retry"] {
+            let valid = tmp.path().join(id);
+            fs::create_dir(&valid).unwrap();
+            fs::write(valid.join("note"), sentinel).unwrap();
+            ok(&[
+                "share-init",
+                "--state",
+                s(&state),
+                "--folder",
+                id,
+                "--root",
+                s(&valid),
+            ]);
+            assert_eq!(fs::read(valid.join("note")).unwrap(), sentinel);
+            let mut names: Vec<_> = fs::read_dir(&valid)
+                .unwrap()
+                .map(|item| item.unwrap().file_name())
+                .collect();
+            names.sort();
+            assert_eq!(names, [".everywhere-folder", "note"]);
+        }
+    }
+}
+
+#[test]
 fn independent_devices_roundtrip_unicode_empty_files_and_directories() {
     let tmp = TempDir::new().unwrap();
     let (a, b) = pair(tmp.path());

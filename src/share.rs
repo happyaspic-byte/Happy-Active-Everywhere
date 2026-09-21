@@ -176,8 +176,17 @@ impl Share {
             );
         }
         let directory = directory(&state, id)?;
-        fs::create_dir(&directory).context("share already exists")?;
+        ensure!(!directory.try_exists()?, "share already exists");
         let handle = Root::open(&root)?;
+        match handle.dir.symlink_metadata(".everywhere-folder") {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+            Ok(_) => anyhow::bail!("share root already contains a folder marker"),
+        }
+        // A refused filesystem must not leave a marker or an incomplete share
+        // registry entry that would also block unrelated future registrations.
+        handle.preflight()?;
+        fs::create_dir(&directory).context("share already exists")?;
         let marker = random_id()?;
         let mut marker_file = handle.dir.open_with(
             ".everywhere-folder",

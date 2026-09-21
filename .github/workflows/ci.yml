@@ -58,6 +58,29 @@ jobs:
       - name: Package content acceptance
         if: ${{ !cancelled() }}
         run: python scripts/verify-package.py
+      - name: Storage registration acceptance
+        if: ${{ success() }}
+        shell: bash
+        run: python scripts/verify-storage-preflight.py --binary target/debug/everywhere${{ runner.os == 'Windows' && '.exe' || '' }} --report folder-report/storage-ci.json
+      - name: Upload storage registration summary
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-registration-${{ matrix.os }}-${{ github.sha }}
+          path: folder-report/storage-ci.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Storage probe replacement regression
+        if: ${{ success() && runner.os != 'Windows' }}
+        run: python3 scripts/verify-preflight-race.py --binary target/debug/everywhere --report folder-report/storage-race-ci.json
+      - name: Upload storage replacement summary
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-replacement-${{ matrix.os }}-${{ github.sha }}
+          path: folder-report/storage-race-ci.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Prepare hosted Linux user service manager
         if: ${{ success() && runner.os == 'Linux' }}
         shell: bash

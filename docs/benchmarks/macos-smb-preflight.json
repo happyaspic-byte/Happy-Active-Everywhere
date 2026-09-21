@@ -1,0 +1,19 @@
+{
+  "date": "2026-09-22",
+  "baseline_commit": "69bf5f9e13c0ef562e00bae6b1662cf01d19bfe2",
+  "tested_changes": "filesystem preflight and probe cleanup correction",
+  "binary_sha256": "44a95e6151d45899408b34441c261a910eab7569875453a716f7b5573cf77054",
+  "environment": "macOS-26.6.2-arm64-arm-64bit",
+  "candidate_filesystem": "mounted SMB data directory; state on local APFS",
+  "qualification": "unsupported-filesystem rejection only",
+  "status": "passed",
+  "registration_succeeded": false,
+  "registration_error": "Error: filesystem preflight: durable directory synchronization is required\n\nCaused by:\n    Operation not supported (os error 45)",
+  "synthetic_payload_sha256": "0eadbd2a7d31b54cddbb628c08c4e2fa702800bf62daeaa7c9c5a81826a5355b",
+  "registry_reusable": true,
+  "probe_and_marker_absent_after_rejection": true,
+  "peer_sync_verified": false,
+  "physical_peers_verified": false,
+  "power_loss_verified": false,
+  "long_duration_verified": false
+}

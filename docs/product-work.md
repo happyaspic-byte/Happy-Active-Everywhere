@@ -295,3 +295,45 @@ still pending. Hosted APFS acceptance also includes actual ENOSPC during device
 backup and recovery; those new cases have not yet run. No local DiskImages commands
 were used. Full-product physical device/NAS/WAN, reboot/power-loss and soak gates
 remain open; the 100 GiB test is still deferred.
+
+The device-recovery delivery gates above were subsequently closed by `69bf5f9`
+and [workflow 35659512218](https://github.com/happyaspic-byte/Happy-Active-Everywhere/actions/runs/35659512218):
+macOS/Ubuntu passed 92 Rust tests each, Windows 80, and hosted macOS passed all
+seven APFS fault cases. Final packages were checked for their exact commit and
+SHA-256 and now exclude private test fixtures. Those results do not close the
+physical-device, NAS, WAN, reboot/power-loss or elapsed soak gates.
+
+## Actual SMB registration failure and preflight — 2026-09-22
+
+A bounded live trial used a new synthetic directory on an existing SMB mount,
+with all device identities and SQLite state on the Mac's local filesystem.
+`share-init` failed before the planned roundtrip. The old implementation left a
+folder marker and an incomplete registry entry, which could also prevent later
+unrelated registration. Backtrace and independent OS probes identified missing
+directory `F_FULLFSYNC` and hard-link support on this mount. Ordinary `fsync`
+working was insufficient for the primitives used by this engine.
+
+Registration now preflights these primitives using a private disposable probe,
+before reserving the share ID or marker. It also rejects an existing marker or
+non-directory root without reserving the ID. The CLI regression failed on the
+old code and passed after the change. The actual SMB rejection acceptance
+verifies the diagnostic, absence of registry/marker/probe residue, independent
+SHA-256 preservation and registration elsewhere using both the same and another
+ID. Local supported-filesystem acceptance also passed. CI now runs that local
+acceptance on all three OSes and uploads only summary JSON, excluding private
+fixture state. Full delivery results for this change are recorded in the PR.
+
+Independent review then reproduced a new cleanup race: replacing the probe with
+a symlink could make cleanup delete files in the replacement. A process-level
+regression reproduced the deletion before correction. Cleanup now retains the
+original open handle, checks directory identity and tracks successful creates;
+failed creates never authorize removing existing files. The probe does not test
+ordinary replacing rename. Review also caught a Unix-only mutation causing a
+Windows lint failure, and the documentation now explicitly records Windows'
+existing directory-sync no-op. POSIX CI exercises the replacement regression.
+
+[Storage qualification](storage-qualification.md) contains the repeatable
+commands and boundaries. NAS synchronization is **still unsupported in this
+tested configuration**. No 3-peer NAS roundtrip or long-duration process was
+started after the registration failure. User files were untouched; synthetic
+fixtures and private failure evidence were retained for inspection.

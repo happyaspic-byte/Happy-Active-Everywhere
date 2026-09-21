@@ -77,6 +77,95 @@ fn finish_record(transaction: &Dir) -> Result<()> {
     sync(transaction)
 }
 impl Root {
+    /// Exercise the primitives used by the recovery journal before registering
+    /// a share. Never weaken durability or no-clobber publication for a mount.
+    pub fn preflight(&self) -> Result<()> {
+        sync(&self.dir)
+            .context("filesystem preflight: durable directory synchronization is required")?;
+        let name = format!(".everywhere-preflight-{}", random_id()?);
+        let mut builder = cap_std::fs::DirBuilder::new();
+        builder.recursive(false);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        self.dir
+            .create_dir_with(&name, &builder)
+            .context("filesystem preflight: cannot create a private probe directory")?;
+        // Keep this handle for all work and cleanup. Reopening the name during
+        // cleanup could follow a replacement into a user's existing directory.
+        let probe = Self {
+            dir: self.dir.open_dir(&name).with_context(|| {
+                format!("filesystem preflight: cannot open probe; inspect {name}")
+            })?,
+        };
+        let unchanged = || -> Result<()> {
+            ensure!(
+                self.dir.symlink_metadata(&name)?.file_type().is_dir(),
+                "filesystem preflight: probe path was replaced"
+            );
+            let current = Self {
+                dir: self.dir.open_dir(&name)?,
+            };
+            ensure!(
+                probe.same_directory(&current)?,
+                "filesystem preflight: probe directory changed"
+            );
+            Ok(())
+        };
+        let mut created = Vec::new();
+        let result = (|| -> Result<()> {
+            unchanged()?;
+            let mut file = new_file(&probe.dir, Path::new("source"))?;
+            created.push("source");
+            file.write_all(b"everywhere filesystem capability probe\n")?;
+            file.sync_all()
+                .context("filesystem preflight: durable file synchronization is required")?;
+            drop(file);
+            probe
+                .dir
+                .hard_link("source", &probe.dir, "linked")
+                .context("filesystem preflight: hard-link publication is required")?;
+            created.push("linked");
+            match probe.dir.hard_link("source", &probe.dir, "linked") {
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                _ => anyhow::bail!(
+                    "filesystem preflight: publication must refuse an existing destination"
+                ),
+            }
+            sync(&probe.dir)?;
+            sync(&self.dir)
+        })();
+        // If create_new failed, none of the directory's contents belong to us.
+        // Preserve it, including any files placed there before we opened it.
+        if created.is_empty() {
+            return result.with_context(|| format!("filesystem preflight stopped; inspect {name}"));
+        }
+        // Only remove our randomly named private probe and its known files.
+        // A failure is reported with the retained location, never hidden.
+        let cleanup = (|| -> Result<()> {
+            unchanged()?;
+            for file in created.into_iter().rev() {
+                match probe.dir.remove_file(file) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            unchanged()
+        })();
+        let cleanup = cleanup.and_then(|()| {
+            probe.dir.remove_open_dir()?;
+            sync(&self.dir)
+        });
+        if let Err(cleanup) = cleanup {
+            let context =
+                format!("filesystem preflight cleanup failed; inspect {name}: {cleanup:#}");
+            return Err(result.err().unwrap_or(cleanup)).context(context);
+        }
+        result.context("filesystem preflight failed; share was not registered")
+    }
     fn sync_parent(&self, path: &Path) -> Result<()> {
         match path.parent().filter(|p| !p.as_os_str().is_empty()) {
             Some(parent) => sync(&self.dir.open_dir(parent)?),
