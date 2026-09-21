@@ -48,6 +48,11 @@ impl Versions {
 
     pub fn join(&self, other: &Self) -> Result<Self> {
         ensure!(
+            serde_json::to_vec(self)?.len() <= 64 * 1024
+                && serde_json::to_vec(other)?.len() <= 64 * 1024,
+            "version metadata exceeds the per-path limit"
+        );
+        ensure!(
             self.heads.len() <= 128 && other.heads.len() <= 128,
             "too many concurrent versions"
         );

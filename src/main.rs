@@ -178,7 +178,11 @@ async fn main() -> Result<()> {
             everywhere::share::Share::create(&share.state, &share.folder, &root, mode)?;
             println!("initialized");
         }
-        Command::SharePeer { share, peer, remove } => {
+        Command::SharePeer {
+            share,
+            peer,
+            remove,
+        } => {
             everywhere::share::grant(&share.state, &share.folder, &peer, remove)?;
             println!("updated");
         }
@@ -199,19 +203,36 @@ async fn main() -> Result<()> {
             let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
             println!("{}", folder.conflicts()?);
         }
-        Command::Sync { share, peer, addr, continuous, interval_ms } => {
-            loop {
-                let result = everywhere::sync::connect(&share.state, &share.folder, &peer, addr).await;
-                match result {
-                    Ok(()) => println!("{}", serde_json::json!({"status":"complete","folder":share.folder})),
-                    Err(error) if continuous => eprintln!("{}", serde_json::json!({"status":"retrying","error":format!("{error:#}")})),
-                    Err(error) => return Err(error),
-                }
-                if !continuous { break; }
-                tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+        Command::Sync {
+            share,
+            peer,
+            addr,
+            continuous,
+            interval_ms,
+        } => loop {
+            let result = everywhere::sync::connect(&share.state, &share.folder, &peer, addr).await;
+            match result {
+                Ok(()) => println!(
+                    "{}",
+                    serde_json::json!({"status":"complete","folder":share.folder})
+                ),
+                Err(error) if continuous => eprintln!(
+                    "{}",
+                    serde_json::json!({"status":"retrying","error":format!("{error:#}")})
+                ),
+                Err(error) => return Err(error),
             }
-        }
-        Command::SyncServe { share, peer, listen, once } => {
+            if !continuous {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+        },
+        Command::SyncServe {
+            share,
+            peer,
+            listen,
+            once,
+        } => {
             everywhere::sync::serve(&share.state, &share.folder, &peer, listen, once).await?;
         }
 

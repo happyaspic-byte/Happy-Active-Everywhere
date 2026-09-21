@@ -13,6 +13,7 @@ pub(crate) struct Timing {
     pub io: Duration,
     pub heartbeat: Duration,
     pub operation: Duration,
+    pub frame: usize,
 }
 
 impl Default for Timing {
@@ -21,7 +22,14 @@ impl Default for Timing {
             io: Duration::from_secs(60),
             heartbeat: Duration::from_secs(5),
             operation: Duration::from_secs(24 * 60 * 60),
+            frame: MAX_FRAME,
         }
+    }
+}
+
+impl Timing {
+    pub fn control() -> Self {
+        Self { frame: 4 * 1024 * 1024, ..Self::default() }
     }
 }
 
@@ -38,7 +46,7 @@ async fn packet<S: AsyncWrite + Unpin, T: Serialize>(
     timing: Timing,
 ) -> Result<()> {
     let bytes = serde_json::to_vec(value)?;
-    ensure!(bytes.len() <= MAX_FRAME, "frame too large");
+    ensure!(bytes.len() <= timing.frame, "frame too large");
     timeout(timing.io, async {
         stream.write_u32(bytes.len() as u32).await?;
         stream.write_all(&bytes).await?;
@@ -63,7 +71,7 @@ pub(crate) async fn read<S: AsyncRead + Unpin, T: DeserializeOwned>(
     timeout(timing.operation, async {
         loop {
             let size = timeout(timing.io, stream.read_u32()).await?? as usize;
-            ensure!(size <= MAX_FRAME, "frame too large");
+            ensure!(size <= timing.frame, "frame too large");
             let mut bytes = vec![0; size];
             timeout(timing.io, stream.read_exact(&mut bytes)).await??;
             if let Packet::Ready(value) = serde_json::from_slice::<Packet<T>>(&bytes)? {
@@ -103,6 +111,7 @@ mod tests {
             io: Duration::from_millis(250),
             heartbeat: Duration::from_millis(25),
             operation: Duration::from_secs(5),
+            frame: 4096,
         }
     }
 

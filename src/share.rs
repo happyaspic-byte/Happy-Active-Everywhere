@@ -1,9 +1,20 @@
-use crate::{identity, model::{Content, Versions, collision_key, validate_path}, root::{Root, random_id}, storage::Manifest, versions::Mode};
+use crate::{
+    identity,
+    model::{Content, Versions, collision_key, validate_path},
+    root::{Root, random_id},
+    storage::Manifest,
+    versions::Mode,
+};
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::{collections::{BTreeMap, BTreeSet}, fs::{self, File, OpenOptions}, io::Write, path::{Path, PathBuf}};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -18,11 +29,22 @@ pub struct Config {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Record { pub path: String, pub versions: Versions, pub seq: u64 }
+pub struct Record {
+    pub path: String,
+    pub versions: Versions,
+    pub seq: u64,
+}
 #[derive(Clone)]
-struct Local { record: Record, materialized: Option<Content>, observed: Versions }
+struct Local {
+    record: Record,
+    materialized: Option<Content>,
+    observed: Versions,
+}
 #[derive(Debug, Default, Serialize)]
-pub struct ScanReport { pub changed: usize, pub pending_deletions: usize }
+pub struct ScanReport {
+    pub changed: usize,
+    pub pending_deletions: usize,
+}
 
 pub struct Share {
     pub config: Config,
@@ -32,62 +54,129 @@ pub struct Share {
     _lock: File,
 }
 fn valid_id(id: &str) -> Result<()> {
-    ensure!(!id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'), "invalid share identifier");
+    ensure!(
+        !id.is_empty()
+            && id.len() <= 64
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+        "invalid share identifier"
+    );
     Ok(())
 }
-fn directory(state: &Path, id: &str) -> Result<PathBuf> { valid_id(id)?; Ok(state.join("shares").join(id)) }
+fn directory(state: &Path, id: &str) -> Result<PathBuf> {
+    valid_id(id)?;
+    Ok(state.join("shares").join(id))
+}
 fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    let mut options = OpenOptions::new(); options.create_new(true).write(true);
-    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
-    let mut file = options.open(path)?; file.write_all(bytes)?; file.sync_all()?;
-    #[cfg(unix)] File::open(path.parent().unwrap())?.sync_all()?;
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    #[cfg(unix)]
+    File::open(path.parent().unwrap())?.sync_all()?;
     Ok(())
 }
 fn read_config(directory: &Path) -> Result<Config> {
     let path = directory.join("config.json");
-    ensure!(fs::symlink_metadata(&path)?.file_type().is_file(), "unsafe share configuration");
-    let bytes = fs::read(path)?; ensure!(bytes.len() <= 128 * 1024, "share configuration too large");
+    ensure!(
+        fs::symlink_metadata(&path)?.file_type().is_file(),
+        "unsafe share configuration"
+    );
+    let bytes = fs::read(path)?;
+    ensure!(bytes.len() <= 128 * 1024, "share configuration too large");
     Ok(serde_json::from_slice(&bytes)?)
 }
 pub fn grant(state: &Path, id: &str, peer: &str, remove: bool) -> Result<()> {
     identity::Identity::new(state, peer)?;
     let directory = directory(state, id)?;
-    let lock = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(directory.join("config.lock"))?;
-    lock.try_lock_exclusive().context("share configuration is busy")?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(directory.join("config.lock"))?;
+    lock.try_lock_exclusive()
+        .context("share configuration is busy")?;
     let mut config = read_config(&directory)?;
-    if remove { config.peers.remove(peer); } else { config.peers.insert(peer.into()); }
+    if remove {
+        config.peers.remove(peer);
+    } else {
+        config.peers.insert(peer.into());
+    }
     let temporary = directory.join(format!("config-{}.tmp", random_id()?));
     write_new(&temporary, &serde_json::to_vec_pretty(&config)?)?;
     fs::rename(temporary, directory.join("config.json"))?;
-    #[cfg(unix)] File::open(&directory)?.sync_all()?;
+    #[cfg(unix)]
+    File::open(&directory)?.sync_all()?;
     Ok(())
 }
 pub(crate) fn check_access(state: &Path, id: &str, peer: &str, writing: bool) -> Result<()> {
     let config = read_config(&directory(state, id)?)?;
-    ensure!(config.peers.contains(peer), "peer is not approved for this share");
-    ensure!(!writing || config.mode != Mode::SendOnly, "share is send-only");
+    ensure!(
+        config.peers.contains(peer),
+        "peer is not approved for this share"
+    );
+    ensure!(
+        !writing || config.mode != Mode::SendOnly,
+        "share is send-only"
+    );
     Ok(())
 }
 impl Share {
     pub fn create(state: &Path, id: &str, root: &Path, mode: Mode) -> Result<Self> {
         valid_id(id)?;
-        let state = state.canonicalize()?; let root = root.canonicalize()?;
-        ensure!(!root.starts_with(&state) && !state.starts_with(&root), "state and share roots must not overlap");
-        let shares = state.join("shares"); fs::create_dir_all(&shares)?;
+        let state = state.canonicalize()?;
+        let root = root.canonicalize()?;
+        ensure!(
+            !root.starts_with(&state) && !state.starts_with(&root),
+            "state and share roots must not overlap"
+        );
+        let shares = state.join("shares");
+        fs::create_dir_all(&shares)?;
         for item in fs::read_dir(&shares)? {
-            let path = item?.path(); if !path.is_dir() { continue; }
+            let path = item?.path();
+            if !path.is_dir() {
+                continue;
+            }
             let config = read_config(&path)?;
-            ensure!(!root.starts_with(&config.root) && !config.root.starts_with(&root), "share roots must not overlap");
+            ensure!(
+                !root.starts_with(&config.root) && !config.root.starts_with(&root),
+                "share roots must not overlap"
+            );
         }
-        let directory = directory(&state, id)?; fs::create_dir(&directory).context("share already exists")?;
+        let directory = directory(&state, id)?;
+        fs::create_dir(&directory).context("share already exists")?;
         let handle = Root::open(&root)?;
         let marker = random_id()?;
-        let mut marker_file = handle.dir.open_with(".everywhere-folder", cap_std::fs::OpenOptions::new().create_new(true).write(true))?;
-        marker_file.write_all(marker.as_bytes())?; marker_file.sync_all()?;
-        #[cfg(unix)] handle.dir.try_clone()?.into_std_file().sync_all()?;
-        let config = Config { id: id.into(), root, identity: identity::fingerprint(&fs::read(state.join("identity.der"))?), epoch: random_id()?, marker, mode, peers: BTreeSet::new() };
+        let mut marker_file = handle.dir.open_with(
+            ".everywhere-folder",
+            cap_std::fs::OpenOptions::new().create_new(true).write(true),
+        )?;
+        marker_file.write_all(marker.as_bytes())?;
+        marker_file.sync_all()?;
+        #[cfg(unix)]
+        handle.dir.try_clone()?.into_std_file().sync_all()?;
+        let config = Config {
+            id: id.into(),
+            root,
+            identity: identity::fingerprint(&fs::read(state.join("identity.der"))?),
+            epoch: random_id()?,
+            marker,
+            mode,
+            peers: BTreeSet::new(),
+        };
         fs::create_dir(directory.join("objects"))?;
-        write_new(&directory.join("config.json"), &serde_json::to_vec_pretty(&config)?)?;
+        write_new(
+            &directory.join("config.json"),
+            &serde_json::to_vec_pretty(&config)?,
+        )?;
         let db = Connection::open(directory.join("index.sqlite"))?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
             CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -98,102 +187,236 @@ impl Share {
             CREATE TABLE cursors(peer TEXT PRIMARY KEY,epoch TEXT NOT NULL,seq INTEGER NOT NULL);
             INSERT INTO meta VALUES('schema','1'),('seq','0');")?;
         db.execute("INSERT INTO meta VALUES('epoch',?1)", [&config.epoch])?;
-        drop(db); Self::open(&state, id)
+        drop(db);
+        Self::open(&state, id)
     }
     pub fn open(state: &Path, id: &str) -> Result<Self> {
         let directory = directory(state, id)?;
         let config = read_config(&directory)?;
         ensure!(config.id == id, "share identifier mismatch");
-        ensure!(config.identity == identity::fingerprint(&fs::read(state.join("identity.der"))?), "share device identity changed");
-        let lock = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(directory.join("index.lock"))?;
-        lock.try_lock_exclusive().context("share is busy; retry after the active operation")?;
+        ensure!(
+            config.identity == identity::fingerprint(&fs::read(state.join("identity.der"))?),
+            "share device identity changed"
+        );
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(directory.join("index.lock"))?;
+        lock.try_lock_exclusive()
+            .context("share is busy; retry after the active operation")?;
         let db_path = directory.join("index.sqlite");
-        ensure!(fs::symlink_metadata(&db_path)?.file_type().is_file(), "unsafe share index");
-        let connection = Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        ensure!(
+            fs::symlink_metadata(&db_path)?.file_type().is_file(),
+            "unsafe share index"
+        );
+        let connection =
+            Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         connection.execute_batch("PRAGMA synchronous=FULL;")?;
         let integrity: String = connection.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
-        ensure!(integrity == "ok", "share index is corrupt; synchronization paused");
-        let epoch: String = connection.query_row("SELECT value FROM meta WHERE key='epoch'", [], |r| r.get(0))?;
+        ensure!(
+            integrity == "ok",
+            "share index is corrupt; synchronization paused"
+        );
+        let epoch: String =
+            connection.query_row("SELECT value FROM meta WHERE key='epoch'", [], |r| r.get(0))?;
         ensure!(epoch == config.epoch, "share index epoch mismatch");
         let root = Root::open(&config.root)?;
-        let result = Self { config, directory, connection, root, _lock: lock };
-        result.check_root()?; result.root.recover()?;
+        let result = Self {
+            config,
+            directory,
+            connection,
+            root,
+            _lock: lock,
+        };
+        result.check_root()?;
+        result.root.recover()?;
         Ok(result)
     }
     pub fn authorize(&self, peer: &str, writing: bool) -> Result<()> {
         let current = read_config(&self.directory)?;
-        ensure!(current.peers.contains(peer), "peer is not approved for this share");
-        ensure!(!writing || current.mode != Mode::SendOnly, "share is send-only");
+        ensure!(
+            current.peers.contains(peer),
+            "peer is not approved for this share"
+        );
+        ensure!(
+            !writing || current.mode != Mode::SendOnly,
+            "share is send-only"
+        );
         Ok(())
     }
     pub fn check_root(&self) -> Result<()> {
         let current = Root::open(&self.config.root)?;
-        ensure!(current.dir.symlink_metadata(".everywhere-folder")?.file_type().is_file(), "share marker unavailable");
+        ensure!(
+            current
+                .dir
+                .symlink_metadata(".everywhere-folder")?
+                .file_type()
+                .is_file(),
+            "share marker unavailable"
+        );
         let marker = current.dir.read_to_string(".everywhere-folder")?;
-        ensure!(marker == self.config.marker, "share mount identity changed; synchronization paused");
+        ensure!(
+            marker == self.config.marker,
+            "share mount identity changed; synchronization paused"
+        );
         Ok(())
     }
-    fn replica(&self) -> String { format!("{}:{}", self.config.identity, &self.config.epoch[..16]) }
+    fn replica(&self) -> String {
+        format!("{}:{}", self.config.identity, &self.config.epoch[..16])
+    }
     fn local(&self, path: &str) -> Result<Option<Local>> {
-        let row = self.connection.query_row("SELECT versions,materialized,observed,seq FROM entries WHERE path=?1", [path], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,u64>(3)?))).optional()?;
-        row.map(|(versions, materialized, observed, seq)| Ok(Local {
-            record: Record { path: path.into(), versions: serde_json::from_str(&versions)?, seq },
-            materialized: serde_json::from_str(&materialized)?, observed: serde_json::from_str(&observed)?,
-        })).transpose()
+        let row = self
+            .connection
+            .query_row(
+                "SELECT versions,materialized,observed,seq FROM entries WHERE path=?1",
+                [path],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        row.map(|(versions, materialized, observed, seq)| {
+            Ok(Local {
+                record: Record {
+                    path: path.into(),
+                    versions: serde_json::from_str(&versions)?,
+                    seq: u64::try_from(seq)?,
+                },
+                materialized: serde_json::from_str(&materialized)?,
+                observed: serde_json::from_str(&observed)?,
+            })
+        })
+        .transpose()
     }
     pub fn sequence(&self) -> Result<u64> {
-        let value: String = self.connection.query_row("SELECT value FROM meta WHERE key='seq'", [], |r| r.get(0))?;
+        let value: String =
+            self.connection
+                .query_row("SELECT value FROM meta WHERE key='seq'", [], |r| r.get(0))?;
         Ok(value.parse()?)
     }
-    fn save(&self, path: &str, versions: &Versions, materialized: Option<&Content>, observed: &Versions) -> Result<()> {
+    fn save(
+        &self,
+        path: &str,
+        versions: &Versions,
+        materialized: Option<&Content>,
+        observed: &Versions,
+    ) -> Result<()> {
         validate_path(path)?;
         let prior = self.local(path)?;
-        let changed = prior.as_ref().is_none_or(|l| l.record.versions != *versions);
+        let changed = prior
+            .as_ref()
+            .is_none_or(|l| l.record.versions != *versions);
         let sequence = if changed {
-            let value = self.sequence()?.checked_add(1).context("share sequence exhausted")?;
+            let value = self
+                .sequence()?
+                .checked_add(1)
+                .context("share sequence exhausted")?;
             ensure!(value <= i64::MAX as u64, "share sequence exhausted");
-            self.connection.execute("UPDATE meta SET value=?1 WHERE key='seq'", [value.to_string()])?; value
-        } else { prior.as_ref().unwrap().record.seq };
-        self.connection.execute("INSERT INTO entries VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(path) DO UPDATE SET versions=excluded.versions,materialized=excluded.materialized,observed=excluded.observed,seq=excluded.seq", params![path,collision_key(path),serde_json::to_string(versions)?,serde_json::to_string(&materialized)?,serde_json::to_string(observed)?,sequence])?;
+            self.connection.execute(
+                "UPDATE meta SET value=?1 WHERE key='seq'",
+                [value.to_string()],
+            )?;
+            value
+        } else {
+            prior.as_ref().unwrap().record.seq
+        };
+        self.connection.execute("INSERT INTO entries VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(path) DO UPDATE SET versions=excluded.versions,materialized=excluded.materialized,observed=excluded.observed,seq=excluded.seq", params![path,collision_key(path),serde_json::to_string(versions)?,serde_json::to_string(&materialized)?,serde_json::to_string(observed)?,i64::try_from(sequence)?])?;
         Ok(())
     }
     pub fn records(&self, since: u64, ceiling: u64, limit: usize) -> Result<Vec<Record>> {
         ensure!(limit <= 256, "metadata page too large");
-        let mut statement = self.connection.prepare("SELECT path,versions,seq FROM entries WHERE seq>?1 AND seq<=?2 ORDER BY seq LIMIT ?3")?;
-        let rows = statement.query_map(params![since,ceiling,limit], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?)))?;
-        rows.map(|r| { let (path, versions, seq) = r?; Ok(Record { path, versions: serde_json::from_str(&versions)?, seq }) }).collect()
+        let mut statement = self.connection.prepare(
+            "SELECT path,versions,seq FROM entries WHERE seq>?1 AND seq<=?2 ORDER BY seq LIMIT ?3",
+        )?;
+        let rows = statement.query_map(params![i64::try_from(since)?, i64::try_from(ceiling)?, limit as i64], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })?;
+        rows.map(|r| {
+            let (path, versions, seq) = r?;
+            Ok(Record {
+                path,
+                versions: serde_json::from_str(&versions)?,
+                seq: u64::try_from(seq)?,
+            })
+        })
+        .collect()
     }
     fn all_paths(&self) -> Result<Vec<String>> {
-        let mut statement = self.connection.prepare("SELECT path FROM entries ORDER BY path")?;
-        Ok(statement.query_map([], |r| r.get(0))?.collect::<std::result::Result<Vec<_>,_>>()?)
+        let mut statement = self
+            .connection
+            .prepare("SELECT path FROM entries ORDER BY path")?;
+        Ok(statement
+            .query_map([], |r| r.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?)
     }
     pub fn object_path(&self, hash: &str) -> Result<PathBuf> {
-        ensure!(hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()), "invalid object identifier");
+        ensure!(
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+            "invalid object identifier"
+        );
         Ok(self.directory.join("objects").join(hash))
     }
     fn capture(&self, path: &str) -> Result<Content> {
         let manifest = Manifest::from_file(self.root.file(path)?)?;
         let object = self.object_path(&manifest.hash)?;
         if object.try_exists()? {
-            ensure!(Manifest::from_path(&object)?.hash == manifest.hash, "content cache corrupted");
+            ensure!(
+                Manifest::from_path(&object)?.hash == manifest.hash,
+                "content cache corrupted"
+            );
         } else {
-            let temporary = self.directory.join("objects").join(format!("{}.part", random_id()?));
+            let temporary = self
+                .directory
+                .join("objects")
+                .join(format!("{}.part", random_id()?));
             let mut input = self.root.file(path)?;
-            let mut output = OpenOptions::new().create_new(true).write(true).open(&temporary)?;
-            std::io::copy(&mut input, &mut output)?; output.sync_all()?;
-            ensure!(Manifest::from_path(&temporary)? == manifest, "source changed while capturing content");
-            fs::hard_link(&temporary, &object)?; fs::remove_file(temporary)?;
-            #[cfg(unix)] File::open(self.directory.join("objects"))?.sync_all()?;
+            let mut output = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)?;
+            std::io::copy(&mut input, &mut output)?;
+            output.sync_all()?;
+            ensure!(
+                Manifest::from_path(&temporary)? == manifest,
+                "source changed while capturing content"
+            );
+            fs::hard_link(&temporary, &object)?;
+            fs::remove_file(temporary)?;
+            #[cfg(unix)]
+            File::open(self.directory.join("objects"))?.sync_all()?;
         }
         Ok(Content::File(manifest.hash))
     }
     pub fn scan(&self, approve_deletes: bool) -> Result<ScanReport> {
-        self.check_root()?; self.root.recover()?;
-        let mut found = BTreeMap::new(); let mut aliases = BTreeMap::new();
+        self.check_root()?;
+        self.root.recover()?;
+        let mut found = BTreeMap::new();
+        let mut aliases = BTreeMap::new();
         for (path, is_dir) in self.root.paths()? {
             let key = collision_key(&path);
-            ensure!(aliases.insert(key, path.clone()).is_none(), "case or Unicode alias collision");
-            let content = if is_dir { Content::Directory } else { self.capture(&path)? };
+            ensure!(
+                aliases.insert(key, path.clone()).is_none(),
+                "case or Unicode alias collision"
+            );
+            let content = if is_dir {
+                Content::Directory
+            } else {
+                self.capture(&path)?
+            };
             found.insert(path, content);
         }
         self.check_root()?;
@@ -201,47 +424,83 @@ impl Share {
         let mut report = ScanReport::default();
         for (path, content) in &found {
             let old = self.local(path)?;
-            self.connection.execute("DELETE FROM pending WHERE path=?1", [path])?;
+            self.connection
+                .execute("DELETE FROM pending WHERE path=?1", [path])?;
             if let Some(previous) = &old {
                 if previous.record.versions != previous.observed
-                    && previous.record.versions.selected().is_some_and(|r| &r.content == content) {
+                    && previous
+                        .record
+                        .versions
+                        .selected()
+                        .is_some_and(|r| &r.content == content)
+                {
                     // The filesystem publication completed before the index
                     // acknowledgement. Adopt it without inventing a local edit.
-                    self.save(path, &previous.record.versions, Some(content), &previous.record.versions)?;
+                    self.save(
+                        path,
+                        &previous.record.versions,
+                        Some(content),
+                        &previous.record.versions,
+                    )?;
                     continue;
                 }
             }
-            if old.as_ref().and_then(|l| l.materialized.as_ref()) == Some(content) { continue; }
-            let observed = old.as_ref().map(|l| l.observed.clone()).unwrap_or_default();
-            let local = observed.edit(&self.replica(), content.clone())?;
-            let combined = old.as_ref().map(|l| l.record.versions.join(&local)).transpose()?.unwrap_or_else(|| local.clone());
-            self.save(path, &combined, Some(content), &local)?; report.changed += 1;
-        }
-        for path in self.all_paths()? {
-            if found.contains_key(&path) { continue; }
-            let old = self.local(&path)?.unwrap();
-            if old.record.versions != old.observed
-                && old.record.versions.selected().is_some_and(|r| r.content == Content::Deleted) {
-                self.save(&path, &old.record.versions, None, &old.record.versions)?;
-                self.connection.execute("DELETE FROM pending WHERE path=?1", [&path])?;
+            if old.as_ref().and_then(|l| l.materialized.as_ref()) == Some(content) {
                 continue;
             }
-            if old.materialized.is_none() { continue; }
+            let observed = old.as_ref().map(|l| l.observed.clone()).unwrap_or_default();
+            let local = observed.edit(&self.replica(), content.clone())?;
+            let combined = old
+                .as_ref()
+                .map(|l| l.record.versions.join(&local))
+                .transpose()?
+                .unwrap_or_else(|| local.clone());
+            self.save(path, &combined, Some(content), &local)?;
+            report.changed += 1;
+        }
+        for path in self.all_paths()? {
+            if found.contains_key(&path) {
+                continue;
+            }
+            let old = self.local(&path)?.unwrap();
+            if old.record.versions != old.observed
+                && old
+                    .record
+                    .versions
+                    .selected()
+                    .is_some_and(|r| r.content == Content::Deleted)
+            {
+                self.save(&path, &old.record.versions, None, &old.record.versions)?;
+                self.connection
+                    .execute("DELETE FROM pending WHERE path=?1", [&path])?;
+                continue;
+            }
+            if old.materialized.is_none() {
+                continue;
+            }
             if approve_deletes {
                 let deleted = old.observed.edit(&self.replica(), Content::Deleted)?;
                 self.save(&path, &old.record.versions.join(&deleted)?, None, &deleted)?;
-                self.connection.execute("DELETE FROM pending WHERE path=?1", [&path])?; report.changed += 1;
+                self.connection
+                    .execute("DELETE FROM pending WHERE path=?1", [&path])?;
+                report.changed += 1;
             } else {
-                self.connection.execute("INSERT OR IGNORE INTO pending VALUES(?1)", [&path])?;
+                self.connection
+                    .execute("INSERT OR IGNORE INTO pending VALUES(?1)", [&path])?;
             }
         }
-        report.pending_deletions = self.connection.query_row("SELECT count(*) FROM pending", [], |r| r.get(0))?;
+        report.pending_deletions = usize::try_from(self.connection.query_row("SELECT count(*) FROM pending", [], |r| r.get::<_, i64>(0))?)?;
         transaction.commit()?;
         Ok(report)
     }
-    pub fn begin_incoming(&self) -> Result<()> { self.connection.execute_batch("DELETE FROM incoming; DELETE FROM needed;")?; Ok(()) }
+    pub fn begin_incoming(&self) -> Result<()> {
+        self.connection
+            .execute_batch("DELETE FROM incoming; DELETE FROM needed;")?;
+        Ok(())
+    }
     pub fn stage(&self, peer: &str, records: &[Record]) -> Result<()> {
-        self.authorize(peer, true)?; ensure!(records.len() <= 256, "metadata page too large");
+        self.authorize(peer, true)?;
+        ensure!(records.len() <= 256, "metadata page too large");
         let transaction = self.connection.unchecked_transaction()?;
         for record in records {
             validate_path(&record.path)?;
@@ -251,42 +510,70 @@ impl Share {
             for head in &validated.heads {
                 if let Content::File(hash) = &head.content {
                     let path = self.object_path(hash)?;
-                    if !path.try_exists()? { self.connection.execute("INSERT OR IGNORE INTO needed VALUES(?1)", [hash])?; }
+                    if !path.try_exists()? {
+                        self.connection
+                            .execute("INSERT OR IGNORE INTO needed VALUES(?1)", [hash])?;
+                    }
                 }
             }
         }
-        transaction.commit()?; Ok(())
+        transaction.commit()?;
+        Ok(())
     }
     pub fn missing_objects(&self, limit: usize) -> Result<Vec<String>> {
         ensure!(limit <= 64, "object request page too large");
-        let mut statement = self.connection.prepare("SELECT hash FROM needed ORDER BY hash LIMIT ?1")?;
-        Ok(statement.query_map([limit], |r| r.get(0))?.collect::<std::result::Result<Vec<_>,_>>()?)
+        let mut statement = self
+            .connection
+            .prepare("SELECT hash FROM needed ORDER BY hash LIMIT ?1")?;
+        Ok(statement
+            .query_map([limit as i64], |r| r.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?)
     }
     pub fn object_received(&self, hash: &str) -> Result<()> {
-        ensure!(Manifest::from_path(&self.object_path(hash)?)?.hash == hash, "received object hash mismatch");
-        self.connection.execute("DELETE FROM needed WHERE hash=?1", [hash])?; Ok(())
+        ensure!(
+            Manifest::from_path(&self.object_path(hash)?)?.hash == hash,
+            "received object hash mismatch"
+        );
+        self.connection
+            .execute("DELETE FROM needed WHERE hash=?1", [hash])?;
+        Ok(())
     }
     pub fn commit_incoming(&self, peer: &str) -> Result<()> {
-        self.authorize(peer, true)?; self.check_root()?;
-        ensure!(self.missing_objects(1)?.is_empty(), "content objects are still missing");
+        self.authorize(peer, true)?;
+        self.check_root()?;
+        ensure!(
+            self.missing_objects(1)?.is_empty(),
+            "content objects are still missing"
+        );
         // Capture changes made by applications during network transfer before
         // joining remote heads; they remain concurrent with the remote edits.
         self.scan(false)?;
         let transaction = self.connection.unchecked_transaction()?;
         let mut after = String::new();
         loop {
-            let rows: Vec<(String,String)> = {
-                let mut statement = self.connection.prepare("SELECT path,versions FROM incoming WHERE path>?1 ORDER BY path LIMIT 256")?;
-                statement.query_map([&after], |r| Ok((r.get(0)?,r.get(1)?)))?.collect::<std::result::Result<_,_>>()?
+            let rows: Vec<(String, String)> = {
+                let mut statement = self.connection.prepare(
+                    "SELECT path,versions FROM incoming WHERE path>?1 ORDER BY path LIMIT 256",
+                )?;
+                statement
+                    .query_map([&after], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<std::result::Result<_, _>>()?
             };
-            if rows.is_empty() { break; }
+            if rows.is_empty() {
+                break;
+            }
             for (path, json) in rows {
                 let remote: Versions = serde_json::from_str(&json)?;
                 let old = self.local(&path)?;
-                let versions = old.as_ref().map(|l| l.record.versions.join(&remote)).transpose()?.unwrap_or(remote);
+                let versions = old
+                    .as_ref()
+                    .map(|l| l.record.versions.join(&remote))
+                    .transpose()?
+                    .unwrap_or(remote);
                 let materialized = old.as_ref().and_then(|l| l.materialized.as_ref());
                 let observed = old.as_ref().map(|l| l.observed.clone()).unwrap_or_default();
-                self.save(&path, &versions, materialized, &observed)?; after = path;
+                self.save(&path, &versions, materialized, &observed)?;
+                after = path;
             }
         }
         self.connection.execute("DELETE FROM incoming", [])?;
@@ -296,44 +583,112 @@ impl Share {
     fn apply_pending(&self, peer: &str) -> Result<()> {
         let mut paths = self.all_paths()?;
         paths.sort_by_key(|p| {
-            let deleted = self.local(p).ok().flatten().and_then(|l| l.record.versions.selected().map(|r| r.content == Content::Deleted)).unwrap_or(false);
-            (deleted, if deleted { usize::MAX - p.matches('/').count() } else { p.matches('/').count() }, p.clone())
+            let deleted = self
+                .local(p)
+                .ok()
+                .flatten()
+                .and_then(|l| {
+                    l.record
+                        .versions
+                        .selected()
+                        .map(|r| r.content == Content::Deleted)
+                })
+                .unwrap_or(false);
+            (
+                deleted,
+                if deleted {
+                    usize::MAX - p.matches('/').count()
+                } else {
+                    p.matches('/').count()
+                },
+                p.clone(),
+            )
         });
         for path in paths {
             let local = self.local(&path)?.unwrap();
-            if local.record.versions == local.observed { continue; }
-            let pending: bool = self.connection.query_row("SELECT EXISTS(SELECT 1 FROM pending WHERE path=?1)", [&path], |r| r.get(0))?;
+            if local.record.versions == local.observed {
+                continue;
+            }
+            let pending: bool = self.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pending WHERE path=?1)",
+                [&path],
+                |r| r.get(0),
+            )?;
             // An unapproved local deletion stays local; do not resurrect it
             // merely because an unchanged peer repeats its metadata.
-            if pending { continue; }
-            let selected = &local.record.versions.selected().context("empty version set")?.content;
-            let object = match selected { Content::File(hash) => Some(self.object_path(hash)?), _ => None };
-            self.authorize(peer, true)?; self.check_root()?;
-            self.root.apply(&path, local.materialized.as_ref(), selected, object.as_deref())?;
+            if pending {
+                continue;
+            }
+            let selected = &local
+                .record
+                .versions
+                .selected()
+                .context("empty version set")?
+                .content;
+            let object = match selected {
+                Content::File(hash) => Some(self.object_path(hash)?),
+                _ => None,
+            };
+            self.authorize(peer, true)?;
+            self.check_root()?;
+            self.root.apply(
+                &path,
+                local.materialized.as_ref(),
+                selected,
+                object.as_deref(),
+            )?;
             let transaction = self.connection.unchecked_transaction()?;
-            let actual = if *selected == Content::Deleted { None } else { Some(selected) };
-            self.save(&path, &local.record.versions, actual, &local.record.versions)?;
+            let actual = if *selected == Content::Deleted {
+                None
+            } else {
+                Some(selected)
+            };
+            self.save(
+                &path,
+                &local.record.versions,
+                actual,
+                &local.record.versions,
+            )?;
             transaction.commit()?;
         }
         Ok(())
     }
-    pub fn cursor(&self, peer: &str) -> Result<(String,u64)> {
-        Ok(self.connection.query_row("SELECT epoch,seq FROM cursors WHERE peer=?1", [peer], |r| Ok((r.get(0)?,r.get(1)?))).optional()?.unwrap_or_default())
+    pub fn cursor(&self, peer: &str) -> Result<(String, u64)> {
+        let (epoch, sequence): (String, i64) = self.connection.query_row(
+            "SELECT epoch,seq FROM cursors WHERE peer=?1", [peer],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional()?.unwrap_or_default();
+        Ok((epoch, u64::try_from(sequence)?))
     }
     pub fn set_cursor(&self, peer: &str, epoch: &str, sequence: u64) -> Result<()> {
-        self.connection.execute("INSERT INTO cursors VALUES(?1,?2,?3) ON CONFLICT(peer) DO UPDATE SET epoch=excluded.epoch,seq=excluded.seq", params![peer,epoch,sequence])?; Ok(())
+        self.connection.execute("INSERT INTO cursors VALUES(?1,?2,?3) ON CONFLICT(peer) DO UPDATE SET epoch=excluded.epoch,seq=excluded.seq", params![peer,epoch,i64::try_from(sequence)?])?;
+        Ok(())
     }
     pub fn status(&self) -> Result<serde_json::Value> {
-        let entries: Vec<_> = self.all_paths()?.iter().map(|p| self.local(p).map(|l| l.unwrap().record)).collect::<Result<_>>()?;
-        let pending: Vec<String> = { let mut s=self.connection.prepare("SELECT path FROM pending ORDER BY path")?; s.query_map([], |r| r.get(0))?.collect::<std::result::Result<_,_>>()? };
-        Ok(serde_json::json!({"folder":self.config.id,"root":self.config.root,"epoch":self.config.epoch,"sequence":self.sequence()?,"entries":entries,"pending_deletions":pending,"sqlite":rusqlite::version()}))
+        let entries: Vec<_> = self
+            .all_paths()?
+            .iter()
+            .map(|p| self.local(p).map(|l| l.unwrap().record))
+            .collect::<Result<_>>()?;
+        let pending: Vec<String> = {
+            let mut s = self
+                .connection
+                .prepare("SELECT path FROM pending ORDER BY path")?;
+            s.query_map([], |r| r.get(0))?
+                .collect::<std::result::Result<_, _>>()?
+        };
+        Ok(
+            serde_json::json!({"folder":self.config.id,"root":self.config.root,"epoch":self.config.epoch,"sequence":self.sequence()?,"entries":entries,"pending_deletions":pending,"sqlite":rusqlite::version()}),
+        )
     }
     pub fn conflicts(&self) -> Result<serde_json::Value> {
         let mut conflicts = Vec::new();
         for path in self.all_paths()? {
             let local = self.local(&path)?.unwrap();
             let heads = &local.record.versions.heads;
-            if heads.len() < 2 || heads.iter().all(|h| h.content == heads[0].content) { continue; }
+            if heads.len() < 2 || heads.iter().all(|h| h.content == heads[0].content) {
+                continue;
+            }
             let revisions: Vec<_> = heads.iter().map(|h| {
                 let object = if let Content::File(hash) = &h.content { Some(self.object_path(hash)?) } else { None };
                 Ok(serde_json::json!({"id":h.id()?,"content":h.content,"clock":h.clock,"object_path":object}))
