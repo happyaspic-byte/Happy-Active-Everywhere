@@ -41,6 +41,17 @@ enum Command {
         #[arg(long)]
         allow_deletes: bool,
     },
+    /// Detect folder changes with bounded-interval full rescans.
+    Watch {
+        #[arg(long)]
+        db: PathBuf,
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        device: String,
+        #[arg(long, default_value_t=1000, value_parser=clap::value_parser!(u64).range(50..))]
+        interval_ms: u64,
+    },
     /// Show persisted file versions and deletion records.
     IndexStatus {
         #[arg(long)]
@@ -120,6 +131,28 @@ async fn main() -> Result<()> {
             let events =
                 everywhere::index::Index::open(&db, &root, &device)?.scan(allow_deletes)?;
             println!("{}", serde_json::to_string(&events)?);
+        }
+        Command::Watch {
+            db,
+            root,
+            device,
+            interval_ms,
+        } => {
+            use std::io::Write;
+            let mut index = everywhere::index::Index::open(&db, &root, &device)?;
+            println!("{}", serde_json::json!({"status":"watching"}));
+            std::io::stdout().flush()?;
+            loop {
+                match index.scan(false) {
+                    Ok(events) if !events.is_empty() => {
+                        println!("{}", serde_json::json!({"events":events}))
+                    }
+                    Ok(_) => {}
+                    Err(error) => println!("{}", serde_json::json!({"error":format!("{error:#}")})),
+                }
+                std::io::stdout().flush()?;
+                tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+            }
         }
         Command::IndexStatus { db, root, device } => {
             let entries = everywhere::index::Index::open(&db, &root, &device)?.entries()?;

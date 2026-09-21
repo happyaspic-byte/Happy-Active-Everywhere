@@ -451,3 +451,91 @@ fn restore_cli_preserves_replaced_current_version() {
         .collect();
     assert!(saved.contains(&b"current".to_vec()));
 }
+
+#[test]
+fn watch_cli_detects_changes_and_keeps_running_after_missing_file() {
+    use std::{sync::mpsc, thread, time::Duration};
+    let d = TempDir::new().unwrap();
+    let root = d.path().join("folder");
+    let db = d.path().join("state.sqlite");
+    fs::create_dir(&root).unwrap();
+    ok(&[
+        "folder-init",
+        "--db",
+        s(&db),
+        "--root",
+        s(&root),
+        "--device",
+        "a",
+    ]);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_everywhere"))
+        .args([
+            "watch",
+            "--db",
+            s(&db),
+            "--root",
+            s(&root),
+            "--device",
+            "a",
+            "--interval-ms",
+            "50",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if tx.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    struct ChildGuard(Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut guard = ChildGuard(child);
+    assert!(
+        rx.recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .contains("watching")
+    );
+    fs::write(root.join("one"), b"created").unwrap();
+    let created = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(created.contains("created"), "{created}");
+    fs::remove_file(root.join("one")).unwrap();
+    let error = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(error.contains("error"), "{error}");
+    fs::write(root.join("one"), b"changed").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let line = rx
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap();
+        if line.contains("modified") {
+            break;
+        }
+    }
+    guard.0.kill().unwrap();
+    guard.0.wait().unwrap();
+    reader.join().unwrap();
+    let entries = ok(&[
+        "index-status",
+        "--db",
+        s(&db),
+        "--root",
+        s(&root),
+        "--device",
+        "a",
+    ]);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&entries).unwrap()[0]["clock"]["a"],
+        2
+    );
+}

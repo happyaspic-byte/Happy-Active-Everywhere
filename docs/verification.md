@@ -14,7 +14,7 @@ Cargo/rustc 1.97.1. 빈 저장소에서 feature/safe-transfer-alpha 브랜치 �
 - 처음 CLI 테스트의 수신 stdout pipe를 조기 닫는 테스트 결함을 수정하고 전체 재실행.
 
 ## 자동화 결과
-`cargo test --locked --all-targets -- --nocapture`: CLI 8개 + 저장소 8개 + 인덱스 4개 + 버전 판단 3개 = 23개 통과.
+`cargo test --locked --all-targets -- --nocapture`: CLI 9개 + 저장소 8개 + 인덱스 4개 + 버전 판단 3개 = 24개 통과.
 
 - CLI: 정상 전송 2회, 송신·수신 강제 종료 후 재개 2회, SHA-256 동일.
 - 재개 2회 모두 검증된 블록 1개 재사용, 나머지 5개 전송.
@@ -84,3 +84,5 @@ SHA-256: `91f2ba191af80a72e75595bb4f4b1e5f50a6e0368b356f289829c9b31c382b45`.
 - 원본·검사 후 집계 SHA-256: `64d510240464bb4bac886b0c3b6f167933f462c1489393e8617e9cefb97d1fb3`.
 - 이 결과는 로컬 인덱스 측정이다. 작은 파일의 네트워크 동기화와 상주 에이전트 유휴 RSS는 미검증.
 - [실측 JSON](benchmarks/macos-index-100k.json).
+
+주기 감시 CLI: 파일 생성 감지·누락 오류·재생성 후 수정 감지·프로세스 재시작 상태 보존 통과. `watch-red.log`에 누락 진입점 실패, `watch-green.log`·`watch-clippy.log`에 전체 회귀/정적 검사 결과 보존.
