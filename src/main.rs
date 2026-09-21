@@ -21,8 +21,15 @@ struct ShareArgs {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Register and control the current user's background synchronization service.
+    Service {
+        #[command(subcommand)]
+        action: ServiceCommand,
+    },
     /// Serve the private, local management dashboard.
     Manage {
+        #[arg(long, hide = true)]
+        parent_watch: bool,
         #[arg(long)]
         state: PathBuf,
         #[arg(long, default_value = "127.0.0.1:7445")]
@@ -226,10 +233,30 @@ enum Command {
         block_delay_ms: u64,
     },
 }
+#[derive(Subcommand)]
+enum ServiceCommand {
+    #[command(hide = true)]
+    Run {
+        #[arg(long)]
+        state: PathBuf,
+    },
+}
 #[tokio::main(worker_threads = 2)]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Manage { state, listen } => everywhere::management::serve(&state, listen).await?,
+        Command::Service {
+            action: ServiceCommand::Run { state },
+        } => everywhere::service::run(&state)?,
+        Command::Manage {
+            state,
+            listen,
+            parent_watch,
+        } => {
+            if parent_watch {
+                everywhere::jobs::watch_parent();
+            }
+            everywhere::management::serve(&state, listen).await?;
+        }
         Command::ManagementToken { state } => {
             println!("{}", everywhere::management::token(&state)?)
         }

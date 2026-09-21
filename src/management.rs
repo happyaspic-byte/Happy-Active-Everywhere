@@ -59,9 +59,13 @@ pub fn token(state: &Path) -> Result<String> {
 }
 struct App {
     state: PathBuf,
+    device: String,
     token: String,
     host: String,
     jobs: Arc<crate::jobs::Jobs>,
+}
+async fn health(State(app): State<Arc<App>>) -> Json<Value> {
+    Json(json!({"status":"ok", "device":app.device,"pid":std::process::id()}))
 }
 fn equal_secret(left: &str, right: &str) -> bool {
     left.len() == right.len()
@@ -305,6 +309,7 @@ pub async fn serve(state: &Path, listen: SocketAddr) -> Result<()> {
         }
     });
     let app = Arc::new(App {
+        device: identity::fingerprint(&fs::read(state.join("identity.der"))?),
         state,
         token: credential,
         host: address.to_string(),
@@ -334,6 +339,7 @@ pub async fn serve(state: &Path, listen: SocketAddr) -> Result<()> {
             }),
         )
         .route("/api/status", get(status))
+        .route("/api/health", get(health))
         .route("/api/command", post(command))
         .layer(DefaultBodyLimit::max(64 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), guard))

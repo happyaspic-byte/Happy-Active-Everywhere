@@ -14,3 +14,4 @@ pub mod sync;
 pub mod management;
 
 pub mod jobs;
+pub mod service;

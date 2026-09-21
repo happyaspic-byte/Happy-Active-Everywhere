@@ -293,6 +293,7 @@ impl Jobs {
         for config in inner.configs.values() {
             let mut value = serde_json::to_value(config)?;
             value["running"] = json!(inner.running.contains_key(&config.id));
+            value["pid"] = json!(inner.running.get(&config.id).map(|r| r.child.id()));
             if let Some(status) = inner.progress.get(&config.id) {
                 let status = status
                     .lock()
