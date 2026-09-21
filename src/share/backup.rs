@@ -279,6 +279,100 @@ pub(crate) fn capture(share: &Share, output: &Path) -> Result<u64> {
     Ok(objects)
 }
 
+/// Import into an unpublished private workspace; never use archived root paths.
+pub(crate) fn import(
+    checkpoint: &Path,
+    state: &Path,
+    staged_root: &Path,
+    final_root: &Path,
+) -> Result<()> {
+    let (manifest, source) = open_checkpoint(checkpoint)?;
+    valid_id(&manifest.config.id)?;
+    let directory = directory(state, &manifest.config.id)?;
+    private_dir(&directory)?;
+    private_dir(&directory.join("objects"))?;
+    private_dir(staged_root)?;
+    object_hashes(&source, |hash| {
+        copy_private(
+            &checkpoint.join("objects").join(hash),
+            &directory.join("objects").join(hash),
+            hash,
+        )
+    })?;
+    snapshot(&source, &directory.join("index.sqlite"))?;
+    let mut config = manifest.config.clone();
+    config.identity = identity::fingerprint(&fs::read(state.join("identity.der"))?);
+    config.epoch = random_id()?;
+    config.marker = random_id()?;
+    config.root = final_root.into();
+    config.peers.clear();
+    config.mode = Mode::ReceiveOnly;
+    let database = Connection::open(directory.join("index.sqlite"))?;
+    database.execute_batch("PRAGMA synchronous=FULL; DELETE FROM cursors; INSERT OR REPLACE INTO meta VALUES('recovery_pending','1');")?;
+    database.execute(
+        "UPDATE meta SET value=?1 WHERE key='epoch'",
+        [&config.epoch],
+    )?;
+    write_new(
+        &staged_root.join(".everywhere-folder"),
+        config.marker.as_bytes(),
+    )?;
+    let root = Root::open(staged_root)?;
+    // Restore materialized bytes, not a causal head awaiting application.
+    let mut statement = source.prepare("SELECT path,materialized FROM entries WHERE materialized IS NOT NULL AND path NOT IN (SELECT path FROM pending) ORDER BY length(path),path")?;
+    for row in statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        let (path, json) = row?;
+        let content: Content = serde_json::from_str(&json)?;
+        let object = match &content {
+            Content::File(hash) => Some(directory.join("objects").join(hash)),
+            _ => None,
+        };
+        root.apply(&path, None, &content, object.as_deref())?;
+    }
+    write_new(
+        &directory.join("config.json"),
+        &serde_json::to_vec_pretty(&config)?,
+    )?;
+    drop(database);
+    OpenOptions::new()
+        .write(true)
+        .open(directory.join("index.sqlite"))?
+        .sync_all()?;
+    sync_dir(&directory)?;
+    sync_dir(staged_root)
+}
+
+pub(crate) fn activate_device(
+    state: &Path,
+    id: &str,
+    mode: Mode,
+    offline: bool,
+) -> Result<serde_json::Value> {
+    let _device = crate::device::config_guard(state)?;
+    let share = Share::open(state, id)?;
+    let _config = lock(&share.directory, "config.lock")?;
+    ensure!(
+        offline || !share.recovery_pending()?,
+        "restored device must fully reconcile first; offline authority is an explicit override"
+    );
+    let mut config = read_config(&share.directory)?;
+    config.mode = mode;
+    let temporary = share.directory.join(format!("config-{}.tmp", random_id()?));
+    write_new(&temporary, &serde_json::to_vec_pretty(&config)?)?;
+    // Interrupted activation retains the previous receive-only mode.
+    if offline {
+        share.connection.execute(
+            "INSERT OR REPLACE INTO meta VALUES('recovery_pending','0')",
+            [],
+        )?;
+    }
+    fs::rename(temporary, share.directory.join("config.json"))?;
+    sync_dir(&share.directory)?;
+    Ok(
+        serde_json::json!({"status":"device-folder-activated","folder":id,"mode":mode,"offline_authority":offline}),
+    )
+}
+
 pub fn recover(state: &Path, id: &str, checkpoint: &Path) -> Result<serde_json::Value> {
     let directory = directory(state, id)?;
     real_dir(&directory)?;

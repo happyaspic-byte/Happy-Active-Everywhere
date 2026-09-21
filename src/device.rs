@@ -274,3 +274,90 @@ pub fn inspect(backup: &Path, key: &Path) -> Result<Value> {
     let (staging, header) = archive::decode(backup, key, None)?;
     header.summary(staging.path())
 }
+
+pub fn recover(
+    backup: &Path,
+    key: &Path,
+    output: &Path,
+    retired_device: Option<&str>,
+) -> Result<Value> {
+    let output = new_output(output)?;
+    let parent = output.parent().unwrap();
+    let (decoded, mut header) = archive::decode(backup, key, Some(parent))?;
+    let summary = header.summary(decoded.path())?;
+    let old_identity = identity::fingerprint(&header.certificate);
+    if let Some(expected) = retired_device {
+        ensure!(
+            expected == old_identity,
+            "retired device fingerprint does not match backup"
+        );
+    }
+    let workspace = tempfile::Builder::new()
+        .prefix(".everywhere-restore-")
+        .tempdir_in(parent)?;
+    let state = workspace.path().join("state");
+    let identity = if retired_device.is_some() {
+        private_dir(&state)?;
+        private_dir(&state.join("peers"))?;
+        write_private(&state.join("identity.der"), &header.certificate)?;
+        write_private(&state.join("identity.key.der"), &header.private_key)?;
+        old_identity
+    } else {
+        identity::init(&state)?
+    };
+    private_dir(&state.join("recovery-peers"))?;
+    for (peer, cert) in &header.peers {
+        write_private(
+            &state.join("recovery-peers").join(format!("{peer}.der")),
+            cert,
+        )?;
+    }
+    for config in header.jobs.values_mut() {
+        config.enabled = false;
+    }
+    write_private(
+        &state.join("jobs.json"),
+        &serde_json::to_vec_pretty(&header.jobs)?,
+    )?;
+    write_private(
+        &state.join("device-recovery.json"),
+        &serde_json::to_vec_pretty(&summary)?,
+    )?;
+    private_dir(&state.join("shares"))?;
+    private_dir(&workspace.path().join("folders"))?;
+    for id in &header.folders {
+        share::backup::import(
+            &decoded.path().join("folders").join(id),
+            &state,
+            &workspace.path().join("folders").join(id),
+            &output.join("folders").join(id),
+        )?;
+    }
+    sync_dir(&workspace.path().join("folders"))?;
+    sync_dir(&state)?;
+    sync_dir(workspace.path())?;
+    archive::publish_directory(workspace.path(), &output)?;
+    // The staging path no longer exists; TempDir never owns the published tree.
+    sync_dir(parent)?;
+    Ok(
+        json!({"status":"device-recovered","identity":identity,"state":output.join("state"),
+        "output":output,"folders":header.folders.len(),"quarantined":true}),
+    )
+}
+
+pub fn activate(state: &Path, folder: &str, offline_authority: bool) -> Result<Value> {
+    share::valid_id(folder)?;
+    let report: Value = serde_json::from_slice(&bounded(
+        &state.join("device-recovery.json"),
+        4 * 1024 * 1024,
+    )?)?;
+    let folders = report["folders"]
+        .as_array()
+        .context("invalid recovery report")?;
+    let config = folders
+        .iter()
+        .find(|c| c["id"] == folder)
+        .context("folder was not recovered by this device operation")?;
+    let config: share::Config = serde_json::from_value(config.clone())?;
+    share::backup::activate_device(state, folder, config.mode, offline_authority)
+}

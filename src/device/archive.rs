@@ -3,6 +3,33 @@ use super::*;
 const MAGIC: &[u8] = b"EVERYWHERE-DEVICE-1\n";
 const MAX_HEADER: usize = 4 * 1024 * 1024;
 
+pub(super) fn publish_directory(source: &Path, target: &Path) -> Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        use rustix::fs::{CWD, RenameFlags, renameat_with};
+        renameat_with(CWD, source, CWD, target, RenameFlags::NOREPLACE)?;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+        let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+        let target: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+        ensure!(
+            !source[..source.len() - 1].contains(&0) && !target[..target.len() - 1].contains(&0),
+            "invalid output path"
+        );
+        // SAFETY: live NUL-terminated UTF-16 arrays; no replace, cross-volume
+        // copy or deferred-reboot flags. Both directories share a parent.
+        if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    anyhow::bail!("atomic device recovery publication is unsupported on this OS");
+    Ok(())
+}
+
 fn write_record(output: &mut impl Write, path: &str, source: &Path) -> Result<()> {
     regular(source)?;
     let mut input = File::open(source)?;

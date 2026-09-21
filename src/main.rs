@@ -21,6 +21,26 @@ struct ShareArgs {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Recover into a NEW workspace with authority disabled until reviewed.
+    DeviceRecover {
+        #[arg(long)]
+        backup: PathBuf,
+        #[arg(long)]
+        key: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        /// Restore this identity only when its original device is retired.
+        #[arg(long)]
+        retired_device: Option<String>,
+    },
+    /// Restore a recovered folder's prior mode after full peer reconciliation.
+    DeviceActivate {
+        #[command(flatten)]
+        share: ShareArgs,
+        /// Accept stale offline state as authoritative without reconciliation.
+        #[arg(long)]
+        offline_authority: bool,
+    },
     /// Generate an offline backup key; print only its public age recipient.
     DeviceKeygen {
         #[arg(long)]
@@ -363,6 +383,22 @@ async fn main() -> Result<()> {
             let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
             println!("{}", folder.status()?);
         }
+        Command::DeviceRecover {
+            backup,
+            key,
+            output,
+            retired_device,
+        } => println!(
+            "{}",
+            everywhere::device::recover(&backup, &key, &output, retired_device.as_deref())?
+        ),
+        Command::DeviceActivate {
+            share,
+            offline_authority,
+        } => println!(
+            "{}",
+            everywhere::device::activate(&share.state, &share.folder, offline_authority)?
+        ),
         Command::DeviceKeygen { output } => println!("{}", everywhere::device::keygen(&output)?),
         Command::DeviceBackup {
             state,
