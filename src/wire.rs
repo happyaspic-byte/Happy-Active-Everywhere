@@ -29,7 +29,10 @@ impl Default for Timing {
 
 impl Timing {
     pub fn control() -> Self {
-        Self { frame: 4 * 1024 * 1024, ..Self::default() }
+        Self {
+            frame: 4 * 1024 * 1024,
+            ..Self::default()
+        }
     }
 }
 

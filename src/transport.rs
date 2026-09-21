@@ -207,52 +207,6 @@ pub async fn send(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::storage::BLOCK_SIZE;
-
-    #[tokio::test]
-    async fn two_blocks_can_be_in_flight_before_the_first_acknowledgement() {
-        let directory = tempfile::TempDir::new().unwrap();
-        let source = directory.path().join("source");
-        std::fs::write(&source, vec![7; BLOCK_SIZE * 2]).unwrap();
-        let manifest = Manifest::from_path(&source).unwrap();
-        let (mut sender, mut receiver) = tokio::io::duplex(BLOCK_SIZE);
-        let receive = async {
-            for expected in [0, 1] {
-                let index = timeout(Duration::from_secs(2), receiver.read_u64()).await??;
-                ensure!(index == expected, "wrong block");
-                let mut bytes = vec![0; BLOCK_SIZE];
-                timeout(Duration::from_secs(2), receiver.read_exact(&mut bytes)).await??;
-                ensure!(bytes.iter().all(|b| *b == 7), "wrong bytes");
-            }
-            for index in [0u64, 1] {
-                wire::send(&mut receiver, index, Timing::default()).await?;
-            }
-            Ok::<(), anyhow::Error>(())
-        };
-        let send = send_blocks(
-            &mut sender,
-            Blocks {
-                source: &source,
-                manifest: &manifest,
-                missing: &[0, 1],
-                delay: Duration::ZERO,
-            },
-            || Ok(()),
-        );
-        // Bound the whole scenario; a stop-and-wait sender deadlocks here.
-        let (sent, received) = timeout(Duration::from_secs(5), async {
-            tokio::join!(send, receive)
-        })
-        .await
-        .unwrap();
-        received.unwrap();
-        sent.unwrap();
-    }
-}
-
 pub(crate) type Approval = std::sync::Arc<dyn Fn() -> Result<()> + Send + Sync>;
 
 pub(crate) async fn send_object<S>(
@@ -344,4 +298,50 @@ where
     wire::work(stream, timing, move || receiver.finish_checked(|| check())).await?;
     wire::send(stream, "complete", timing).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::BLOCK_SIZE;
+
+    #[tokio::test]
+    async fn two_blocks_can_be_in_flight_before_the_first_acknowledgement() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let source = directory.path().join("source");
+        std::fs::write(&source, vec![7; BLOCK_SIZE * 2]).unwrap();
+        let manifest = Manifest::from_path(&source).unwrap();
+        let (mut sender, mut receiver) = tokio::io::duplex(BLOCK_SIZE);
+        let receive = async {
+            for expected in [0, 1] {
+                let index = timeout(Duration::from_secs(2), receiver.read_u64()).await??;
+                ensure!(index == expected, "wrong block");
+                let mut bytes = vec![0; BLOCK_SIZE];
+                timeout(Duration::from_secs(2), receiver.read_exact(&mut bytes)).await??;
+                ensure!(bytes.iter().all(|b| *b == 7), "wrong bytes");
+            }
+            for index in [0u64, 1] {
+                wire::send(&mut receiver, index, Timing::default()).await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        };
+        let send = send_blocks(
+            &mut sender,
+            Blocks {
+                source: &source,
+                manifest: &manifest,
+                missing: &[0, 1],
+                delay: Duration::ZERO,
+            },
+            || Ok(()),
+        );
+        // Bound the whole scenario; a stop-and-wait sender deadlocks here.
+        let (sent, received) = timeout(Duration::from_secs(5), async {
+            tokio::join!(send, receive)
+        })
+        .await
+        .unwrap();
+        received.unwrap();
+        sent.unwrap();
+    }
 }

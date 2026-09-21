@@ -162,7 +162,7 @@ impl Share {
         marker_file.write_all(marker.as_bytes())?;
         marker_file.sync_all()?;
         #[cfg(unix)]
-        handle.dir.try_clone()?.into_std_file().sync_all()?;
+        handle.dir.open(".")?.sync_all()?;
         let config = Config {
             id: id.into(),
             root,
@@ -335,13 +335,16 @@ impl Share {
         let mut statement = self.connection.prepare(
             "SELECT path,versions,seq FROM entries WHERE seq>?1 AND seq<=?2 ORDER BY seq LIMIT ?3",
         )?;
-        let rows = statement.query_map(params![i64::try_from(since)?, i64::try_from(ceiling)?, limit as i64], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-            ))
-        })?;
+        let rows = statement.query_map(
+            params![i64::try_from(since)?, i64::try_from(ceiling)?, limit as i64],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            },
+        )?;
         rows.map(|r| {
             let (path, versions, seq) = r?;
             Ok(Record {
@@ -489,7 +492,11 @@ impl Share {
                     .execute("INSERT OR IGNORE INTO pending VALUES(?1)", [&path])?;
             }
         }
-        report.pending_deletions = usize::try_from(self.connection.query_row("SELECT count(*) FROM pending", [], |r| r.get::<_, i64>(0))?)?;
+        report.pending_deletions = usize::try_from(self.connection.query_row(
+            "SELECT count(*) FROM pending",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?)?;
         transaction.commit()?;
         Ok(report)
     }
@@ -654,10 +661,13 @@ impl Share {
         Ok(())
     }
     pub fn cursor(&self, peer: &str) -> Result<(String, u64)> {
-        let (epoch, sequence): (String, i64) = self.connection.query_row(
-            "SELECT epoch,seq FROM cursors WHERE peer=?1", [peer],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        ).optional()?.unwrap_or_default();
+        let (epoch, sequence): (String, i64) = self
+            .connection
+            .query_row("SELECT epoch,seq FROM cursors WHERE peer=?1", [peer], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?
+            .unwrap_or_default();
         Ok((epoch, u64::try_from(sequence)?))
     }
     pub fn set_cursor(&self, peer: &str, epoch: &str, sequence: u64) -> Result<()> {

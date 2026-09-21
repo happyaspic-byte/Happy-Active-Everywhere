@@ -33,7 +33,7 @@ pub(crate) fn random_id() -> Result<String> {
 }
 fn sync(dir: &Dir) -> Result<()> {
     #[cfg(unix)]
-    dir.try_clone()?.into_std_file().sync_all()?;
+    dir.open(".")?.sync_all()?;
     #[cfg(not(unix))]
     let _ = dir;
     Ok(())
@@ -70,6 +70,12 @@ fn finish_record(transaction: &Dir) -> Result<()> {
     sync(transaction)
 }
 impl Root {
+    fn sync_parent(&self, path: &Path) -> Result<()> {
+        match path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            Some(parent) => sync(&self.dir.open_dir(parent)?),
+            None => sync(&self.dir),
+        }
+    }
     pub fn open(path: &Path) -> Result<Self> {
         ensure!(
             std::fs::symlink_metadata(path)?.file_type().is_dir(),
@@ -134,7 +140,7 @@ impl Root {
             for component in parent.components() {
                 current.push(component);
                 match self.dir.create_dir(&current) {
-                    Ok(()) => sync(&self.dir)?,
+                    Ok(()) => self.sync_parent(&current)?,
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(e) => return Err(e.into()),
                 }
@@ -169,7 +175,7 @@ impl Root {
                 "file/directory conflict needs explicit resolution: {path}"
             );
             self.dir.create_dir(path)?;
-            sync(&self.dir)?;
+            self.sync_parent(Path::new(path))?;
             return Ok(());
         }
         if current == Some(Content::Directory) {
@@ -179,7 +185,7 @@ impl Root {
             );
             // Never remove or move a nonempty directory on a tombstone.
             self.dir.remove_dir(path)?;
-            sync(&self.dir)?;
+            self.sync_parent(Path::new(path))?;
             return Ok(());
         }
         match self.dir.create_dir(".everywhere-recovery") {
@@ -226,7 +232,7 @@ impl Root {
         if current.is_some() {
             self.dir.rename(path, &transaction, "previous")?;
             sync(&transaction)?;
-            sync(&self.dir)?;
+            self.sync_parent(Path::new(path))?;
             if read_content(&transaction, Path::new("previous"))? != current {
                 let _ = transaction.hard_link("previous", &self.dir, path);
                 sync(&self.dir)?;
@@ -248,7 +254,7 @@ impl Root {
                 "local file appeared during deletion; content preserved"
             );
         }
-        sync(&self.dir)?;
+        self.sync_parent(Path::new(path))?;
         finish_record(&transaction)
     }
     pub fn recover(&self) -> Result<()> {
@@ -277,9 +283,8 @@ impl Root {
             let actual = self.content(&intent.path)?;
             if actual.as_ref() == Some(&intent.after)
                 || (actual.is_none() && intent.after == Content::Deleted)
+                || actual == intent.before
             {
-                finish_record(&transaction)?;
-            } else if actual == intent.before {
                 finish_record(&transaction)?;
             } else if actual.is_none() && transaction.symlink_metadata("previous").is_ok() {
                 transaction.hard_link("previous", &self.dir, &intent.path)?;
