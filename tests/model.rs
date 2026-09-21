@@ -1,4 +1,7 @@
-use everywhere::{model::{Content, Versions, validate_path}, versions::Relation};
+use everywhere::{
+    model::{Content, Versions, validate_path},
+    versions::Relation,
+};
 
 fn file(letter: char) -> Content {
     Content::File(letter.to_string().repeat(64))
@@ -12,8 +15,18 @@ fn three_offline_edits_converge_in_every_delivery_order() {
     let c = initial.edit("c", file('d')).unwrap();
     let expected = a.join(&b).unwrap().join(&c).unwrap();
     assert_eq!(expected.heads.len(), 3);
-    for inputs in [[&a,&b,&c], [&a,&c,&b], [&b,&a,&c], [&b,&c,&a], [&c,&a,&b], [&c,&b,&a]] {
-        let got = inputs.into_iter().try_fold(Versions::default(), |v, next| v.join(next)).unwrap();
+    for inputs in [
+        [&a, &b, &c],
+        [&a, &c, &b],
+        [&b, &a, &c],
+        [&b, &c, &a],
+        [&c, &a, &b],
+        [&c, &b, &a],
+    ] {
+        let got = inputs
+            .into_iter()
+            .try_fold(Versions::default(), |v, next| v.join(next))
+            .unwrap();
         assert_eq!(got, expected);
         assert_eq!(got.join(&got).unwrap(), got);
     }
@@ -30,7 +43,10 @@ fn delete_and_edit_keep_the_edit_and_converge_after_resolution() {
     let resolved = conflicted.edit("b", file('b')).unwrap();
     assert_eq!(resolved.heads.len(), 1);
     for previous in &conflicted.heads {
-        assert_eq!(resolved.heads[0].clock.relation(&previous.clock), Relation::After);
+        assert_eq!(
+            resolved.heads[0].clock.relation(&previous.clock),
+            Relation::After
+        );
     }
     assert_eq!(resolved.join(&initial).unwrap(), resolved);
     assert_eq!(resolved.join(&conflicted).unwrap(), resolved);
@@ -57,7 +73,21 @@ fn portable_paths_accept_unicode_and_reject_escape_and_alias_names() {
     for path in ["한글 문서/😀.txt", "empty", "folder/nested"] {
         validate_path(path).unwrap();
     }
-    for path in ["", "/absolute", "../escape", "a/../b", "a//b", "C:/file", "a\\b", "a/NUL.txt", "a/COM1", "a.", "a ", ".everywhere-folder", "a/.everywhere-objects/x"] {
+    for path in [
+        "",
+        "/absolute",
+        "../escape",
+        "a/../b",
+        "a//b",
+        "C:/file",
+        "a\\b",
+        "a/NUL.txt",
+        "a/COM1",
+        "a.",
+        "a ",
+        ".everywhere-folder",
+        "a/.everywhere-objects/x",
+    ] {
         assert!(validate_path(path).is_err(), "accepted {path:?}");
     }
 }
