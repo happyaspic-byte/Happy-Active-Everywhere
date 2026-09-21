@@ -212,7 +212,9 @@ enum Command {
 async fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Manage { state, listen } => everywhere::management::serve(&state, listen).await?,
-        Command::ManagementToken { state } => println!("{}", everywhere::management::token(&state)?),
+        Command::ManagementToken { state } => {
+            println!("{}", everywhere::management::token(&state)?)
+        }
         Command::ShareInit { share, root, mode } => {
             everywhere::share::Share::create(&share.state, &share.folder, &root, mode)?;
             println!("initialized");

@@ -122,6 +122,26 @@ fn management_requires_token_and_same_origin_and_registers_a_real_folder() {
     let json: Value = serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(json["folders"][0]["folder"], "photos");
     assert_eq!(json["folders"][0]["files"], 0);
+    fs::write(root.join("note.txt"), b"review deletion").unwrap();
+    let scan = serde_json::json!({"action":"scan","folder":"photos"}).to_string();
+    assert!(request(address, "POST", "/api/command", Some(token), None, &scan).starts_with("HTTP/1.1 200"));
+    fs::remove_file(root.join("note.txt")).unwrap();
+    assert!(request(address, "POST", "/api/command", Some(token), None, &scan).starts_with("HTTP/1.1 200"));
+    let pending = request(address, "POST", "/api/command", Some(token), None, r#"{"action":"pending","folder":"photos"}"#);
+    assert!(pending.starts_with("HTTP/1.1 200"), "{pending}");
+    let pending: Value = serde_json::from_str(pending.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(pending[0]["path"], "note.txt");
+    let approve = serde_json::json!({"action":"approve-deletion","folder":"photos","path":"note.txt","expected":pending[0]["versions"]}).to_string();
+    // An edit after review invalidates the approval rather than deleting it.
+    fs::write(root.join("note.txt"), b"new local edit").unwrap();
+    assert!(request(address, "POST", "/api/command", Some(token), None, &approve).starts_with("HTTP/1.1 409"));
+    assert_eq!(fs::read(root.join("note.txt")).unwrap(), b"new local edit");
+    fs::remove_file(root.join("note.txt")).unwrap();
+    assert!(request(address, "POST", "/api/command", Some(token), None, &scan).starts_with("HTTP/1.1 200"));
+    let pending = request(address, "POST", "/api/command", Some(token), None, r#"{"action":"pending","folder":"photos"}"#);
+    let pending: Value = serde_json::from_str(pending.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    let approve = serde_json::json!({"action":"approve-deletion","folder":"photos","path":"note.txt","expected":pending[0]["versions"]}).to_string();
+    assert!(request(address, "POST", "/api/command", Some(token), None, &approve).starts_with("HTTP/1.1 200"));
     drop(server);
     reader.join().unwrap();
 }

@@ -107,7 +107,8 @@ fn read_config(directory: &Path) -> Result<Config> {
     Ok(config)
 }
 pub fn grant(state: &Path, id: &str, peer: &str, remove: bool) -> Result<()> {
-    identity::Identity::new(state, peer)?;
+    identity::valid_peer(peer)?;
+    if !remove { identity::Identity::new(state, peer)?; }
     let directory = directory(state, id)?;
     let lock = OpenOptions::new()
         .create(true)
@@ -249,6 +250,8 @@ impl Share {
         Ok(result)
     }
     pub fn authorize(&self, peer: &str, writing: bool) -> Result<()> {
+        let state = self.directory.parent().and_then(Path::parent).context("invalid share state location")?;
+        identity::Identity::new(state, peer)?;
         let current = read_config(&self.directory)?;
         ensure!(
             current.peers.contains(peer),
@@ -800,16 +803,33 @@ pub fn catalog(state: &Path) -> Result<serde_json::Value> {
     if shares.try_exists()? {
         for entry in fs::read_dir(shares)? {
             let entry = entry?;
-            if !entry.file_type()?.is_dir() { continue; }
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
             ensure!(folders.len() < 1024, "too many registered folders");
             let summary = (|| -> Result<serde_json::Value> {
                 let config = read_config(&entry.path())?;
-                let db = Connection::open_with_flags(entry.path().join("index.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-                let files: i64 = db.query_row("SELECT count(*) FROM entries WHERE json_extract(materialized,'$.kind')='file'", [], |r| r.get(0))?;
-                let pending: i64 = db.query_row("SELECT count(*) FROM pending", [], |r| r.get(0))?;
-                let conflicts: i64 = db.query_row("SELECT count(*) FROM entries WHERE json_array_length(versions,'$.heads')>1", [], |r| r.get(0))?;
-                let sequence: String = db.query_row("SELECT value FROM meta WHERE key='seq'", [], |r| r.get(0))?;
-                Ok(serde_json::json!({"folder":config.id,"root":config.root,"mode":config.mode,"peers":config.peers,"files":files,"pending_deletions":pending,"concurrent_paths":conflicts,"sequence":sequence}))
+                let db = Connection::open_with_flags(
+                    entry.path().join("index.sqlite"),
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                )?;
+                let files: i64 = db.query_row(
+                    "SELECT count(*) FROM entries WHERE json_extract(materialized,'$.kind')='file'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let pending: i64 =
+                    db.query_row("SELECT count(*) FROM pending", [], |r| r.get(0))?;
+                let conflicts: i64 = db.query_row(
+                    "SELECT count(*) FROM entries WHERE json_array_length(versions,'$.heads')>1",
+                    [],
+                    |r| r.get(0),
+                )?;
+                let sequence: String =
+                    db.query_row("SELECT value FROM meta WHERE key='seq'", [], |r| r.get(0))?;
+                Ok(
+                    serde_json::json!({"folder":config.id,"root":config.root,"mode":config.mode,"peers":config.peers,"files":files,"pending_deletions":pending,"concurrent_paths":conflicts,"sequence":sequence}),
+                )
             })();
             folders.push(match summary {
                 Ok(value) => value,
@@ -818,5 +838,7 @@ pub fn catalog(state: &Path) -> Result<serde_json::Value> {
         }
     }
     folders.sort_by_key(|f| f["folder"].as_str().unwrap_or_default().to_owned());
-    Ok(serde_json::json!({"identity":identity::fingerprint(&fs::read(state.join("identity.der"))?),"version":env!("CARGO_PKG_VERSION"),"folders":folders}))
+    Ok(
+        serde_json::json!({"identity":identity::fingerprint(&fs::read(state.join("identity.der"))?),"version":env!("CARGO_PKG_VERSION"),"folders":folders}),
+    )
 }
