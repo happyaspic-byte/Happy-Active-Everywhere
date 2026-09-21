@@ -30,6 +30,16 @@ as an ordinary argument, with environment expansion disabled, and verifies
 `CmdletizationQuery_NotFound` ID; only that ID and its TaskName-specific form,
 paired with ObjectNotFound, are accepted. Permission/query errors still fail.
 
+`c734ccd` passed the complete Ubuntu/macOS jobs. Windows returned a principal
+account name instead of its registration SID; resolving both to the SID corrected
+the observed ownership rejection. `666f904` then passed Windows installation,
+literal paths, foreign-task refusal, start/stop, update/rollback and manual restart,
+but manager-crash recovery timed out under the original task restart policy.
+The Windows supervisor now retries its bootstrap directly; a one-minute native
+trigger also recovers a killed supervisor while IgnoreNew preserves a running
+instance. Acceptance tests both failures and verifies resumed content plus child
+termination. These Windows changes require fresh native qualification.
+
 A local restart test also exposed an incorrect test precondition: visible bytes
 could precede DB acknowledgement. Killing there and editing while stopped left
 two preserved, concurrent revisions, so asserting a particular primary filename

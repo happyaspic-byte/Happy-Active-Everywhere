@@ -42,10 +42,12 @@ its own service identifier, so separate test devices do not share a registration
 - Windows uses an interactive current-user Scheduled Task, with limited user
   privileges and no stored password. Windows PowerShell's ScheduledTasks module
   and the user's normal script execution policy must permit the local helper.
-  An encoded PowerShell wrapper passes literal paths to the native bootstrap
+  An encoded PowerShell supervisor passes literal paths to the native bootstrap
   without Task Scheduler expanding `%VARIABLE%`; a parent pipe owns its lifetime.
-  Failed tasks retry at one-minute intervals. This is not a pre-login Windows
-  system service.
+  The supervisor retries a failed bootstrap after three seconds. In addition to
+  login startup, a one-minute scheduled trigger recovers a killed supervisor;
+  IgnoreNew leaves a healthy instance running. Stop disables both triggers.
+  This is not a pre-login Windows system service.
 
 OS file-access and background-item policies still apply to the actual account.
 Test a disposable folder before registering important data. Unsupported user
@@ -106,8 +108,8 @@ and verifies the installer's `current` pointer on every launch, so restarts use
 the selected manager version. Do not remove the bootstrap's retained version:
 its path is recorded in `STATE/service/config.json`. Uninstall/reinstall the
 service before removing old versions or changing the deployment layout.
-For services installed by the intermediate `5d7bf3f` review build on Linux or
-Windows, uninstall using that retained build before installing a newer service
+For services installed by an earlier intermediate review build on Linux or
+Windows, uninstall using that retained build before installing a changed service
 definition. Those initial native definitions are not a stable migration format.
 
 Rolling back across an incompatible state/protocol change is not a data rollback.
@@ -131,6 +133,8 @@ stop/uninstall also check the manager and active worker PIDs. Windows query-erro
 classification has a separate injected-boundary test, not an OS ACL test.
 On POSIX the stop case suspends its worker first and checks termination before
 resuming any survivor in failure cleanup.
+Windows also kills the uniquely identified disposable task supervisor and checks
+that its children exit, the scheduled trigger recreates it and TLS sync resumes.
 The native test removes its own
 registration in `finally`; failed fixtures and bounded diagnostic reports remain
 for inspection. CI explicitly prepares a user manager on disposable Linux

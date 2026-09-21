@@ -18,15 +18,17 @@ $info.FileName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__EX
 $info.Arguments=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__ARGS__'))
 $info.UseShellExecute=$false
 $info.RedirectStandardInput=$true
-$process=New-Object Diagnostics.Process
-$process.StartInfo=$info
-try {
-  if (!$process.Start()) { throw 'Bootstrap did not start' }
-  $process.WaitForExit()
-  exit 1
-} finally {
-  if (!$process.HasExited) { $process.Kill(); $process.WaitForExit() }
-  $process.Dispose()
+while ($true) {
+  $process=New-Object Diagnostics.Process
+  $process.StartInfo=$info
+  try {
+    if (!$process.Start()) { throw 'Bootstrap did not start' }
+    $process.WaitForExit()
+  } finally {
+    if (!$process.HasExited) { $process.Kill(); $process.WaitForExit() }
+    $process.Dispose()
+  }
+  Start-Sleep -Seconds 3
 }
 '@
 $wrapper = $wrapper.Replace('__EXE__',$exeData).Replace('__ARGS__',$argData)
@@ -63,10 +65,13 @@ if ($existing) {
 }
 if ($Action -eq 'install' -and !$existing) {
   $nativeAction = New-ScheduledTaskAction -Execute $nativeExe -Argument $nativeArgs
-  $trigger = New-ScheduledTaskTrigger -AtLogOn -User $userSid
+  $loginTrigger = New-ScheduledTaskTrigger -AtLogOn -User $userSid
+  # A repeating trigger also recovers an externally killed wrapper; IgnoreNew
+  # leaves a healthy instance alone. Disabled tasks do not run either trigger.
+  $healthTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)
   $principal = New-ScheduledTaskPrincipal -UserId $userSid -LogonType Interactive -RunLevel Limited
   $options = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RestartInterval (New-TimeSpan -Minutes 1) -RestartCount 999
-  Register-ScheduledTask -TaskName $settings.id -TaskPath '\' -Action $nativeAction -Trigger $trigger -Principal $principal -Settings $options -Description $settings.owner | Out-Null
+  Register-ScheduledTask -TaskName $settings.id -TaskPath '\' -Action $nativeAction -Trigger @($loginTrigger,$healthTrigger) -Principal $principal -Settings $options -Description $settings.owner | Out-Null
   $existing = Find-Task
 }
 if ($Action -eq 'start') {

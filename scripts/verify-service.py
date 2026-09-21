@@ -274,6 +274,26 @@ try:
     fourth = payload(broot / 'note', 'native supervisor recovered the manager')
     wait(lambda: sha(aroot / 'note') == fourth)
     assert service('status')['healthy']
+    if os.name == 'nt':
+        name = status['native']['task_name']
+        assert re.fullmatch(r'happy-everywhere-[a-f0-9]{32}', name)
+        helper = base / 'kill-owned-wrapper.ps1'
+        helper.write_text("""param([string]$Name)
+$ErrorActionPreference='Stop'
+$task=Get-ScheduledTask -TaskName $Name -TaskPath '\\'
+$action=@($task.Actions)[0]
+$wrapperProcesses=@(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
+  Where-Object { $_.CommandLine -and $_.CommandLine.EndsWith($action.Arguments,[StringComparison]::Ordinal) })
+if ($wrapperProcesses.Count -ne 1) { throw 'Cannot uniquely identify the disposable task wrapper' }
+Stop-Process -Id $wrapperProcesses[0].ProcessId -Force
+""")
+        old_processes = active_processes()
+        before_wrapper_kill = api('/api/health')['pid']
+        run(['powershell.exe', '-NoProfile', '-NonInteractive', '-File', helper, '-Name', name])
+        wait(lambda: not any(process_alive(pid) for pid in old_processes))
+        wait(lambda: (api('/api/health') or {}).get('pid') not in (None, before_wrapper_kill), seconds=130)
+        fourth = payload(broot / 'note', 'scheduled trigger recovered a killed wrapper')
+        wait(lambda: sha(aroot / 'note') == fourth)
     processes = active_processes()
     removed = service('uninstall'); installed = False
     assert removed['installed'] is False
@@ -300,6 +320,7 @@ try:
               'sha256': fourth, 'physical_reboot_verified': False, 'login_cycle_verified': False}
     if os.name == 'nt':
         report['cases'].remove('foreign-loaded-command-refused')
+        report['cases'].append('wrapper-crash-and-scheduled-restart')
     else:
         report['cases'].append('stop-with-suspended-worker')
 except BaseException as error:
@@ -318,7 +339,7 @@ except BaseException as error:
         identifier = json.loads((state / 'service/config.json').read_text())['id']
         if re.fullmatch(r'happy-everywhere-[a-f0-9]{32}', identifier):
             result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
-                f"Get-ScheduledTask -TaskName '{identifier}' -TaskPath '\\' -ErrorAction Stop | Select-Object TaskName,State,Principal | ConvertTo-Json -Depth 5"],
+                f"$t=Get-ScheduledTask -TaskName '{identifier}' -TaskPath '\\' -ErrorAction Stop; $i=$t | Get-ScheduledTaskInfo; @{{state=$t.State.ToString();user=$t.Principal.UserId;logon=$t.Principal.LogonType.ToString();level=$t.Principal.RunLevel.ToString();last_result=$i.LastTaskResult;next_run=$i.NextRunTime}} | ConvertTo-Json"],
                 capture_output=True, text=True, timeout=25)
             commands.append({'native_failure': result.stdout, 'stderr': result.stderr})
 finally:
