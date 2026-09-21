@@ -37,7 +37,7 @@ function Find-Task {
     return Get-ScheduledTask -TaskName $settings.id -TaskPath '\' -ErrorAction Stop
   } catch {
     if ($_.CategoryInfo.Category -eq 'ObjectNotFound' -and
-        $_.FullyQualifiedErrorId.Split(',')[0] -eq 'CmdletizationQuery_NotFound_TaskName') { return $null }
+        $_.FullyQualifiedErrorId.Split(',')[0] -in @('CmdletizationQuery_NotFound_TaskName','CmdletizationQuery_NotFound')) { return $null }
     throw
   }
 }

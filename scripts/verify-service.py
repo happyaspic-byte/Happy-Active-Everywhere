@@ -305,6 +305,15 @@ try:
 except BaseException as error:
     failure = error
     report = {'status': 'failed', 'error': repr(error), 'fixture': str(base)}
+    # Only inspect this disposable test's generated registration, never all
+    # user units or environment. Preserve the real native parser's evidence.
+    if os.name != 'nt' and shutil.which('systemctl') and (state / 'service/config.json').is_file():
+        config = json.loads((state / 'service/config.json').read_text())
+        identifier = config['id']
+        if re.fullmatch(r'happy-everywhere-[a-f0-9]{32}', identifier):
+            result = subprocess.run(['systemctl', '--user', 'show', identifier + '.service',
+                '--property=LoadState,ExecStartEx,FragmentPath,DropInPaths'], capture_output=True, text=True, timeout=25)
+            commands.append({'native_failure': result.stdout, 'stderr': result.stderr})
 finally:
     if installed:
         result = subprocess.run([str(binary), 'service', 'uninstall', '--state', str(state)], capture_output=True, text=True, timeout=60)

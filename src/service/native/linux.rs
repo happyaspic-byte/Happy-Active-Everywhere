@@ -20,7 +20,7 @@ fn definition(config: &Config) -> Result<(PathBuf, String)> {
     valid_path(&base)?;
     let path = base.join("systemd/user").join(unit(config));
     let body = format!(
-        "[Unit]\nDescription=Happy Active Everywhere {}\n\n[Service]\nType=simple\nExecStart=:{} service run --state {}\nRestart=always\nRestartSec=3\nTimeoutStopSec=20\nKillMode=control-group\nUMask=0077\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=Happy Active Everywhere {}\n\n[Service]\nType=simple\nExecStart=:/usr/bin/env -- {} service run --state {}\nRestart=always\nRestartSec=3\nTimeoutStopSec=20\nKillMode=control-group\nUMask=0077\n\n[Install]\nWantedBy=default.target\n",
         config.id,
         quote(config.bootstrap.to_str().unwrap()),
         quote(config.state.to_str().unwrap())
@@ -90,17 +90,27 @@ fn verify_command(config: &Config) -> Result<()> {
         "org.freedesktop.systemd1",
         &path,
         "org.freedesktop.systemd1.Service",
-        "ExecStart",
+        "ExecStartEx",
     ])?;
     let commands = command["data"]
         .as_array()
-        .context("invalid systemd ExecStart")?;
-    let expected = json!([config.bootstrap, "service", "run", "--state", config.state]);
+        .context("invalid systemd ExecStartEx")?;
+    // systemd rejects quotes/backslashes in its executable token even after
+    // unquoting. env execs the literal absolute binary as an ordinary argument.
+    let expected = json!([
+        "/usr/bin/env",
+        "--",
+        config.bootstrap,
+        "service",
+        "run",
+        "--state",
+        config.state
+    ]);
     ensure!(
         commands.len() == 1
-            && commands[0][0] == json!(config.bootstrap)
+            && commands[0][0] == "/usr/bin/env"
             && commands[0][1] == expected
-            && commands[0][2] == false,
+            && commands[0][2] == json!(["no-env-expand"]),
         "systemd loaded command belongs to another definition; preserving it"
     );
     Ok(())

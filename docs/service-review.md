@@ -22,6 +22,14 @@ queries the reversible unit object path directly (loading it in the same propert
 request), and passes normal literal Windows paths to PowerShell without changing
 execution policy. These changes require their own exact-head native acceptance.
 
+Run `35650174471` reached the effective-command checks but rejected Linux paths
+containing quotes: systemd's parser forbids quotes in its executable token even
+after unquoting. The unit now uses `/usr/bin/env --` to exec the literal binary
+as an ordinary argument, with environment expansion disabled, and verifies
+`ExecStartEx` including that flag. Windows reported the combined-filter CIM
+`CmdletizationQuery_NotFound` ID; only that ID and its TaskName-specific form,
+paired with ObjectNotFound, are accepted. Permission/query errors still fail.
+
 A local restart test also exposed an incorrect test precondition: visible bytes
 could precede DB acknowledgement. Killing there and editing while stopped left
 two preserved, concurrent revisions, so asserting a particular primary filename

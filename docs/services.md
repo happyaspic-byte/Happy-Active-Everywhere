@@ -34,8 +34,10 @@ its own service identifier, so separate test devices do not share a registration
   requires that user's GUI login session.
 - Linux uses a systemd user unit under `$XDG_CONFIG_HOME/systemd/user` (normally
   `~/.config/systemd/user`). A reachable user manager/bus is required. The product
-  uses `systemctl` and `busctl` (JSON support, systemd 240+) to inspect the loaded
-  executable and arguments, and refuses units with drop-in overrides.
+  uses `systemctl` and `busctl` (including `ExecStartEx`; tested on systemd 255)
+  to inspect the loaded executable, arguments and execution flags, and refuses
+  units with drop-in overrides. `/usr/bin/env` executes literal installation
+  paths because systemd restricts quotes in its executable token.
   does not enable linger, install a root unit or change machine login policy.
 - Windows uses an interactive current-user Scheduled Task, with limited user
   privileges and no stored password. Windows PowerShell's ScheduledTasks module

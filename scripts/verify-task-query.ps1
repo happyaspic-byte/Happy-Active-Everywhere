@@ -10,8 +10,9 @@ $config=Join-Path $fixture 'request.json'
 function Get-ScheduledTask {
   [CmdletBinding()]param([string]$TaskName,[string]$TaskPath)
   $global:queryCount++
-  if ($global:queryMode -eq 'missing' -or ($global:queryMode -eq 'second' -and $global:queryCount -eq 1)) {
-    Write-Error 'No matching task' -Category ObjectNotFound -ErrorId CmdletizationQuery_NotFound_TaskName
+  if ($global:queryMode -like 'missing*' -or ($global:queryMode -eq 'second' -and $global:queryCount -eq 1)) {
+    $errorId=if ($global:queryMode -eq 'missing-combined') {'CmdletizationQuery_NotFound'} else {'CmdletizationQuery_NotFound_TaskName'}
+    Write-Error 'No matching task' -Category ObjectNotFound -ErrorId $errorId
   } else {
     Write-Error 'Injected scheduler access denial' -Category PermissionDenied -ErrorId SchedulerAccessDenied
   }
@@ -26,9 +27,11 @@ try {
     }
     if (!$rejected) { throw "Scheduler $mode query failure was mistaken for missing registration" }
   }
-  $global:queryMode='missing'; $global:queryCount=0
-  $status=& $Helper -Action uninstall -Config $config | ConvertFrom-Json
-  if ($status.registered -ne $false) { throw 'Exact task-not-found was not accepted' }
+  foreach ($mode in @('missing','missing-combined')) {
+    $global:queryMode=$mode; $global:queryCount=0
+    $status=& $Helper -Action uninstall -Config $config | ConvertFrom-Json
+    if ($status.registered -ne $false) { throw "Exact $mode task-not-found was not accepted" }
+  }
   Write-Output 'Task query error classification passed (injected external boundary)'
 } finally {
   Remove-Item -LiteralPath $fixture -Recurse -Force
