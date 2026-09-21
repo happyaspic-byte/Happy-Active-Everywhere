@@ -1,6 +1,12 @@
 use everywhere::index::{Change, Index};
 use std::fs;
 use tempfile::TempDir;
+
+#[test]
+fn sqlite_includes_the_wal_reset_fix() {
+    let linked = rusqlite::version_number();
+    assert!(linked >= 3_051_003, "linked SQLite {linked} predates the required WAL fix");
+}
 #[test]
 fn scan_persists_edits_and_tombstones_without_wall_clock() {
     let d = TempDir::new().unwrap();
