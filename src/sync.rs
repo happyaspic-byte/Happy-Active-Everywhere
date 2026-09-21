@@ -127,7 +127,14 @@ async fn pull_objects<S: AsyncRead + AsyncWrite + Unpin>(
         }
         for hash in missing {
             let basis = share.basis_object(&hash)?;
-            receive_object(stream, &share.object_path(&hash)?, &hash, basis.as_deref(), check.clone()).await?;
+            receive_object(
+                stream,
+                &share.object_path(&hash)?,
+                &hash,
+                basis.as_deref(),
+                check.clone(),
+            )
+            .await?;
             share.object_received(&hash)?;
         }
     }

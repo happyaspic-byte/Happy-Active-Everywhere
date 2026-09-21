@@ -10,7 +10,7 @@ use fs2::FileExt;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -229,7 +229,7 @@ impl Share {
         );
         let connection =
             Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-        connection.execute_batch("PRAGMA synchronous=FULL;
+        connection.execute_batch("PRAGMA synchronous=FULL; PRAGMA temp_store=FILE;
             CREATE TABLE IF NOT EXISTS history(path TEXT NOT NULL,id TEXT NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(path,id));")?;
         let integrity: String = connection.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
         ensure!(
@@ -441,25 +441,27 @@ impl Share {
     pub fn scan(&self, approve_deletes: bool) -> Result<ScanReport> {
         self.check_root()?;
         self.root.recover()?;
-        let mut found = BTreeMap::new();
-        let mut aliases = BTreeMap::new();
-        for (path, is_dir) in self.root.paths()? {
-            let key = collision_key(&path);
-            ensure!(
-                aliases.insert(key, path.clone()).is_none(),
-                "case or Unicode alias collision"
-            );
-            let content = if is_dir {
-                Content::Directory
-            } else {
-                self.capture(&path)?
-            };
-            found.insert(path, content);
-        }
-        self.check_root()?;
+        self.connection.execute_batch("CREATE TEMP TABLE IF NOT EXISTS scan_seen(path TEXT PRIMARY KEY,alias TEXT UNIQUE NOT NULL,content TEXT NOT NULL); DELETE FROM scan_seen;")?;
         let transaction = self.connection.unchecked_transaction()?;
+        self.root.visit(&mut |path, is_dir| {
+            let content = if is_dir { Content::Directory } else { self.capture(path)? };
+            self.connection.execute("INSERT INTO scan_seen VALUES(?1,?2,?3)", params![path, collision_key(path), serde_json::to_string(&content)?])
+                .context("cannot record scanned path; check case/Unicode aliases and free space")?;
+            Ok(())
+        })?;
+        self.check_root()?;
         let mut report = ScanReport::default();
-        for (path, content) in &found {
+        let mut after = String::new();
+        loop {
+            let page: Vec<(String, String)> = {
+                let mut statement = self.connection.prepare("SELECT path,content FROM scan_seen WHERE path>?1 ORDER BY path LIMIT 256")?;
+                statement.query_map([&after], |r| Ok((r.get(0)?,r.get(1)?)))?.collect::<std::result::Result<_,_>>()?
+            };
+            if page.is_empty() { break; }
+            for (path, json) in &page {
+                after = path.clone();
+                let parsed: Content = serde_json::from_str(json)?;
+                let content = &parsed;
             let old = self.local(path)?;
             self.connection
                 .execute("DELETE FROM pending WHERE path=?1", [path])?;
@@ -495,10 +497,16 @@ impl Share {
             self.save(path, &combined, Some(content), &local)?;
             report.changed += 1;
         }
-        for path in self.all_paths()? {
-            if found.contains_key(&path) {
-                continue;
-            }
+        }
+        let mut after = String::new();
+        loop {
+            let page: Vec<String> = {
+                let mut statement = self.connection.prepare("SELECT e.path FROM entries e LEFT JOIN scan_seen s ON s.path=e.path WHERE s.path IS NULL AND e.path>?1 ORDER BY e.path LIMIT 256")?;
+                statement.query_map([&after], |r| r.get(0))?.collect::<std::result::Result<_,_>>()?
+            };
+            if page.is_empty() { break; }
+            for path in page {
+                after = path.clone();
             let old = self.local(&path)?.unwrap();
             if old.record.versions != old.observed
                 && old
@@ -525,6 +533,7 @@ impl Share {
                 self.connection
                     .execute("INSERT OR IGNORE INTO pending VALUES(?1)", [&path])?;
             }
+        }
         }
         report.pending_deletions = usize::try_from(self.connection.query_row(
             "SELECT count(*) FROM pending",
@@ -630,46 +639,17 @@ impl Share {
         self.apply_pending(peer)
     }
     fn apply_pending(&self, peer: &str) -> Result<()> {
-        let mut paths = self.all_paths()?;
-        paths.sort_by_key(|p| {
-            let deleted = self
-                .local(p)
-                .ok()
-                .flatten()
-                .and_then(|l| {
-                    l.record
-                        .versions
-                        .selected()
-                        .map(|r| r.content == Content::Deleted)
-                })
-                .unwrap_or(false);
-            (
-                deleted,
-                if deleted {
-                    usize::MAX - p.matches('/').count()
-                } else {
-                    p.matches('/').count()
-                },
-                p.clone(),
-            )
-        });
-        for path in paths {
-            let local = self.local(&path)?.unwrap();
-            if local.record.versions == local.observed {
-                continue;
-            }
-            let pending: bool = self.connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM pending WHERE path=?1)",
-                [&path],
-                |r| r.get(0),
-            )?;
-            // An unapproved local deletion stays local; do not resurrect it
-            // merely because an unchanged peer repeats its metadata.
-            if pending {
-                continue;
-            }
+        loop {
+            let paths: Vec<String> = {
+                let mut statement = self.connection.prepare("WITH candidates AS (SELECT e.path, NOT EXISTS(SELECT 1 FROM json_each(e.versions,'$.heads') h WHERE json_extract(h.value,'$.content.kind')!='deleted') AS removing, length(e.path)-length(replace(e.path,'/','')) AS depth FROM entries e WHERE e.versions!=e.observed AND NOT EXISTS(SELECT 1 FROM pending p WHERE p.path=e.path)) SELECT path FROM candidates ORDER BY removing, CASE WHEN removing THEN -depth ELSE depth END, path LIMIT 256")?;
+                statement.query_map([], |r| r.get(0))?.collect::<std::result::Result<_,_>>()?
+            };
+            if paths.is_empty() { break; }
+            for path in paths {
+                let local = self.local(&path)?.unwrap();
             self.authorize(peer, true)?;
             self.apply_local(&path, &local)?;
+            }
         }
         Ok(())
     }
@@ -838,9 +818,12 @@ impl Share {
     }
     pub fn conflicts(&self) -> Result<serde_json::Value> {
         let mut conflicts = Vec::new();
-        for path in self.all_paths()? {
-            let local = self.local(&path)?.unwrap();
-            let heads = &local.record.versions.heads;
+        let mut statement = self.connection.prepare("SELECT path,versions FROM entries WHERE json_array_length(versions,'$.heads')>1 ORDER BY path")?;
+        let rows = statement.query_map([], |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (path, json) = row?;
+            let versions: Versions = serde_json::from_str(&json)?;
+            let heads = &versions.heads;
             if heads.len() < 2 || heads.iter().all(|h| h.content == heads[0].content) {
                 continue;
             }

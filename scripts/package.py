@@ -20,6 +20,8 @@ folder.mkdir(parents=True, exist_ok=False)
 shutil.copy2(binary, folder / name)
 shutil.copy2(root / 'README.md', folder / 'README.md')
 shutil.copytree(root / 'docs', folder / 'docs')
+if (root / 'folder-report').exists():
+    shutil.copytree(root / 'folder-report', folder / 'verification')
 (folder / 'scripts').mkdir()
 for script in ['install.sh', 'install.ps1']:
     shutil.copy2(root / 'scripts' / script, folder / 'scripts' / script)

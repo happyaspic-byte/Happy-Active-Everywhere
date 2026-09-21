@@ -42,6 +42,17 @@ let server, browser;
   await page.getByRole('button',{name:'폴더 등록 ＋',exact:true}).click();
   await page.getByRole('heading',{name:'photos',exact:true}).waitFor();
   assert.ok(fs.existsSync(path.join(root,'.everywhere-folder')));
+  const peerState = path.join(temporary,'peer-state');
+  const peer = run('init','--state',peerState);
+  await page.getByLabel('상대 공개 인증서',{exact:true}).setInputFiles(path.join(peerState,'identity.der'));
+  await page.getByLabel('확인한 상대 장치 지문',{exact:true}).fill(peer);
+  await page.getByRole('button',{name:'장치 승인',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'장치를 승인했습니다.'}).waitFor();
+  assert.ok(fs.existsSync(path.join(state,'peers',`${peer}.der`)));
+  await page.locator('#grant-form').getByLabel('공유할 폴더 ID',{exact:true}).fill('photos');
+  await page.getByRole('button',{name:'폴더 접근 허용',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'폴더 접근을 허용했습니다.'}).waitFor();
+
   fs.writeFileSync(path.join(root,'note.txt'),'original browser content');
   await page.getByRole('button',{name:'변경 재검사',exact:true}).click();
   await page.getByRole('status').filter({hasText:'1개 변경 기록'}).waitFor();

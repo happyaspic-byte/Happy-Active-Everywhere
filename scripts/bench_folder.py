@@ -57,6 +57,8 @@ class Relay:
             with self.listener.accept()[0] as client, socket.create_connection(self.destination, timeout=30) as server:
                 client.settimeout(240)
                 server.settimeout(240)
+                client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                server.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 def pump(source, target, direction):
                     try:
                         while True:

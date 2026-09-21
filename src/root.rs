@@ -97,12 +97,10 @@ impl Root {
         );
         Ok(self.dir.open(path)?.into_std())
     }
-    pub fn paths(&self) -> Result<Vec<(String, bool)>> {
-        let mut result = Vec::new();
-        self.walk(Path::new(""), &mut result)?;
-        Ok(result)
+    pub fn visit(&self, visit: &mut impl FnMut(&str, bool) -> Result<()>) -> Result<()> {
+        self.walk(Path::new(""), visit)
     }
-    fn walk(&self, relative: &Path, result: &mut Vec<(String, bool)>) -> Result<()> {
+    fn walk(&self, relative: &Path, visit: &mut impl FnMut(&str, bool) -> Result<()>) -> Result<()> {
         let directory = if relative.as_os_str().is_empty() {
             self.dir.try_clone()?
         } else {
@@ -127,9 +125,9 @@ impl Root {
                 !kind.is_symlink() && (kind.is_file() || kind.is_dir()),
                 "links and special files are not supported"
             );
-            result.push((portable, kind.is_dir()));
+            visit(&portable, kind.is_dir())?;
             if kind.is_dir() {
-                self.walk(&path, result)?;
+                self.walk(&path, visit)?;
             }
         }
         Ok(())
