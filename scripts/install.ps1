@@ -11,7 +11,7 @@ function Write-Pointer([string]$Name,[string]$Value) {
   $destination = Join-Path $Prefix $Name
   $temporary = Join-Path $Prefix ('.' + $Name + '-new')
   [IO.File]::WriteAllText($temporary, $Value + "`n")
-  if ([IO.File]::Exists($destination)) { [IO.File]::Replace($temporary,$destination,$null) }
+  if ([IO.File]::Exists($destination)) { [IO.File]::Replace($temporary,$destination,[System.Management.Automation.Language.NullString]::Value) }
   else { [IO.File]::Move($temporary,$destination) }
 }
 function Switch-Version([string]$Next) {

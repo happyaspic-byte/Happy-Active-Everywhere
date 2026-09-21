@@ -142,7 +142,10 @@ async fn serve_objects<S: AsyncRead + AsyncWrite + Unpin>(
         if requested.is_empty() {
             return Ok(());
         }
-        ensure!(share.config.mode != Mode::ReceiveOnly, "receive-only share cannot export content objects");
+        ensure!(
+            share.config.mode != Mode::ReceiveOnly,
+            "receive-only share cannot export content objects"
+        );
         for hash in requested {
             check()?;
             send_object(stream, &share.object_path(&hash)?, &hash, check.clone()).await?;

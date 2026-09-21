@@ -85,3 +85,30 @@ large-folder performance remain implementation work. Current folder scans
 rehash content and keep the scan set in memory; the earlier single-file and
 legacy-index benchmark figures do not establish folder-sync performance.
 Physical device, NAS, real LAN/WAN and long-duration gates remain unexecuted.
+
+## Management and packaging progress
+
+- `70e8693`: the real TLS conflict-resolution and historical-restore scenario
+  passed on Ubuntu. New regressions exposed a corrupt epoch panic and locally
+  generated vectors exceeding accepted metadata bounds; both were corrected.
+- `bd6e1f2`: token/origin checks and actual folder creation passed over HTTP.
+  A regression exposed missing global revocation checks in staged application.
+- `954d2f4`: revocation-before-apply and grant removal after revocation passed.
+- `1a378b2`: 49 Ubuntu Rust tests passed, and Chromium exercised real login,
+  registration, scan and historical restoration, verified restored disk bytes,
+  checked mobile overflow and cleared the screen on lock. This intermediate
+  run still failed formatting; the following push cancelled Windows's run.
+- `5ae5f06`: the new managed-job scenario passed on Ubuntu, including actual
+  background TLS delivery, pause, manager restart and resume. A receive-only
+  object-export regression failed and was corrected in the next change.
+  Browser testing caught an ambiguous duplicate folder-label locator; the
+  test now scopes registration to its actual form.
+- POSIX installer behavior passed locally using a disposable executable
+  fixture. Cross-platform CI now tests the actual debug binary before allowing
+  release packaging. Installation keeps prior binaries and checks SHA-256;
+  no independent publisher signature is claimed.
+
+Still pending: final all-green release/package run, service deployment details,
+large-folder memory/scan and delta-reuse optimization, broader filesystem
+fault/security coverage and the final independent branch review. Real devices,
+NAS, WAN and elapsed long-duration tests remain unavailable/unexecuted.
