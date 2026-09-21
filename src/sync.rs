@@ -291,3 +291,26 @@ pub async fn serve(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn receive_only_share_does_not_serve_requested_cached_objects() {
+        let temporary = tempfile::TempDir::new().unwrap();
+        let state = temporary.path().join("state");
+        let root = temporary.path().join("files");
+        crate::identity::init(&state).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("private-note"), b"local-only content").unwrap();
+        let share = Share::create(&state, "personal", &root, Mode::ReceiveOnly).unwrap();
+        share.scan(false).unwrap();
+        let hash = blake3::hash(b"local-only content").to_hex().to_string();
+        let (mut client, mut server) = tokio::io::duplex(8192);
+        wire::send(&mut client, vec![hash], Timing::control()).await.unwrap();
+        let check: Approval = Arc::new(|| Ok(()));
+        let outcome = tokio::time::timeout(std::time::Duration::from_millis(100), serve_objects(&mut server, &share, &check)).await;
+        let error = outcome.expect("receive-only peer began exporting an object").unwrap_err();
+        assert!(error.to_string().contains("receive-only"));
+    }
+}

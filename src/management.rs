@@ -61,6 +61,7 @@ struct App {
     state: PathBuf,
     token: String,
     host: String,
+    jobs: Arc<crate::jobs::Jobs>,
 }
 fn equal_secret(left: &str, right: &str) -> bool {
     left.len() == right.len()
@@ -124,7 +125,7 @@ fn outcome(result: Result<Value>) -> Response {
 }
 async fn status(State(app): State<Arc<App>>) -> Response {
     outcome(
-        match tokio::task::spawn_blocking(move || share::catalog(&app.state)).await {
+        match tokio::task::spawn_blocking(move || -> Result<Value> { let mut status = share::catalog(&app.state)?; status["jobs"] = app.jobs.status()?; Ok(status) }).await {
             Ok(result) => result,
             Err(error) => Err(error.into()),
         },
@@ -133,6 +134,8 @@ async fn status(State(app): State<Arc<App>>) -> Response {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 enum Operation {
+    SaveJob { job: crate::jobs::Config },
+    SetJobEnabled { id: String, enabled: bool },
     Pending {
         folder: String,
     },
@@ -176,6 +179,8 @@ async fn command(State(app): State<Arc<App>>, Json(operation): Json<Operation>) 
     outcome(
         match tokio::task::spawn_blocking(move || -> Result<Value> {
             match operation {
+            Operation::SaveJob { job } => { app.jobs.save(job)?; }
+            Operation::SetJobEnabled { id, enabled } => { app.jobs.set_enabled(&id, enabled)?; }
                 Operation::Pending { folder } => {
                     return Share::open(&app.state, &folder)?.pending();
                 }
@@ -248,10 +253,21 @@ pub async fn serve(state: &Path, listen: SocketAddr) -> Result<()> {
         .context("management is already running")?;
     let listener = tokio::net::TcpListener::bind(listen).await?;
     let address = listener.local_addr()?;
+    let jobs = Arc::new(crate::jobs::Jobs::open(&state)?);
+    let supervisor_jobs = jobs.clone();
+    let supervisor = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        loop {
+            interval.tick().await;
+            let jobs = supervisor_jobs.clone();
+            let _ = tokio::task::spawn_blocking(move || jobs.tick()).await;
+        }
+    });
     let app = Arc::new(App {
         state,
         token: credential,
         host: address.to_string(),
+        jobs: jobs.clone(),
     });
     let router = Router::new()
         .route(
@@ -283,10 +299,13 @@ pub async fn serve(state: &Path, listen: SocketAddr) -> Result<()> {
         .with_state(app);
     println!("LISTEN {address}");
     std::io::stdout().flush()?;
-    axum::serve(listener, router)
+    let result = axum::serve(listener, router)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
-        .await?;
+        .await;
+    supervisor.abort();
+    jobs.shutdown();
+    result?;
     Ok(())
 }

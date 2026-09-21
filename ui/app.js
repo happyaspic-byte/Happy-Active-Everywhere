@@ -42,6 +42,17 @@ async function refresh() {
   $('identity').textContent = data.identity;
   $('version').textContent = data.version;
   $('folder-list').replaceChildren();
+  $('job-list').replaceChildren();
+  for(const job of data.jobs || []) {
+    const row=el('div',undefined,'job');
+    row.append(el('strong',`${job.id} · ${job.enabled ? (job.running ? '실행 중' : '시작 대기') : '일시정지'}`));
+    row.append(el('code',`${job.folder} · ${job.direction} · ${job.address}`));
+    row.append(el('small',job.last_success ? `마지막 완료: ${new Date(job.last_success*1000).toLocaleString()}` : '아직 완료된 동기화가 없습니다.'));
+    if(job.last_message) row.append(el('code',job.last_message));
+    row.append(action(job.enabled ? '일시정지' : '다시 시작',async()=>{await command({action:'set-job-enabled',id:job.id,enabled:!job.enabled});await refresh();}));
+    $('job-list').append(row);
+  }
+
   if (!data.folders.length) $('folder-list').append(el('div', '아직 등록된 폴더가 없습니다. 아래에서 첫 폴더를 연결하세요.', 'empty'));
   for (const folder of data.folders) {
     const card = el('article', undefined, 'folder');
@@ -83,7 +94,9 @@ async function refresh() {
   }
 }
 $('login-form').addEventListener('submit', async (event) => { event.preventDefault(); credential = $('token').value.trim(); try { await refresh(); $('token').value = ''; $('login').hidden = true; $('workspace').hidden = false; $('lock').hidden = false; $('message').hidden = true; } catch (error) { credential = ''; message(error.message,true); } });
-$('lock').addEventListener('click', () => { credential = ''; $('workspace').hidden = true; $('folder-list').replaceChildren(); $('detail-content').replaceChildren(); $('identity').textContent = ''; $('login').hidden = false; $('lock').hidden = true; $('message').hidden = true; });
+$('lock').addEventListener('click', () => { credential = ''; $('workspace').hidden = true; $('folder-list').replaceChildren(); $('job-list').replaceChildren(); $('detail-content').replaceChildren(); $('identity').textContent = ''; $('login').hidden = false; $('lock').hidden = true; $('message').hidden = true; });
 $('refresh').addEventListener('click', () => refresh().catch(error => message(error.message,true)));
 $('close-details').addEventListener('click', () => { $('details').hidden = true; });
 $('folder-form').addEventListener('submit', async (event) => { event.preventDefault(); const form = new FormData(event.target); try { await command({action:'create-folder',folder:form.get('folder'),root:form.get('root'),mode:form.get('mode')}); event.target.reset(); await refresh(); message('폴더를 등록했습니다. 장비 승인 후 동기화를 연결하세요.'); } catch(error) { message(error.message,true); } });
+
+$('job-form').addEventListener('submit',async(event)=>{event.preventDefault();const form=new FormData(event.target);try{await command({action:'save-job',job:{id:form.get('id'),folder:form.get('folder'),peer:form.get('peer'),address:form.get('address'),direction:form.get('direction'),enabled:true}});event.target.reset();await refresh();message('백그라운드 작업을 등록했습니다.');}catch(error){message(error.message,true);}});

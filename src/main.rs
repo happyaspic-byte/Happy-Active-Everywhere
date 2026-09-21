@@ -91,6 +91,8 @@ enum Command {
     },
     /// Exchange folder changes with one explicitly approved device.
     Sync {
+        #[arg(long, hide = true)]
+        parent_watch: bool,
         #[command(flatten)]
         share: ShareArgs,
         #[arg(long)]
@@ -104,6 +106,8 @@ enum Command {
     },
     /// Listen for authenticated changes to one folder from one approved peer.
     SyncServe {
+        #[arg(long, hide = true)]
+        parent_watch: bool,
         #[command(flatten)]
         share: ShareArgs,
         #[arg(long)]
@@ -267,12 +271,15 @@ async fn main() -> Result<()> {
             println!("{}", folder.history(&path)?);
         }
         Command::Sync {
+            parent_watch,
             share,
             peer,
             addr,
             continuous,
             interval_ms,
-        } => loop {
+        } => {
+            if parent_watch { everywhere::jobs::watch_parent(); }
+            loop {
             let result = everywhere::sync::connect(&share.state, &share.folder, &peer, addr).await;
             match result {
                 Ok(()) => println!(
@@ -289,13 +296,16 @@ async fn main() -> Result<()> {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+        }
         },
         Command::SyncServe {
+            parent_watch,
             share,
             peer,
             listen,
             once,
         } => {
+            if parent_watch { everywhere::jobs::watch_parent(); }
             everywhere::sync::serve(&share.state, &share.folder, &peer, listen, once).await?;
         }
 
