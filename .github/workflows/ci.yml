@@ -31,10 +31,14 @@ jobs:
           rustc --version --verbose
           cargo --version
       - name: Format
-        run: cargo fmt --all -- --check
+        run: |
+          cargo fmt --all
+          git diff --exit-code
       - name: Lint
+        if: ${{ !cancelled() }}
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Tests
+        if: ${{ !cancelled() }}
         run: cargo test --locked --all-targets -- --nocapture
       - name: Release build
         run: cargo build --release --locked
