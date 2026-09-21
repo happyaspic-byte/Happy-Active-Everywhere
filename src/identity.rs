@@ -76,6 +76,9 @@ pub fn revoke(state: &Path, peer: &str) -> Result<()> {
     fs::remove_file(state.join("peers").join(format!("{peer}.der")))?;
     Ok(())
 }
+pub(crate) const PROTOCOL: &[u8] = b"everywhere/2";
+
+#[derive(Clone)]
 pub struct Identity {
     state: PathBuf,
     pub peer: String,
@@ -121,7 +124,7 @@ impl Identity {
             .with_protocol_versions(&[&rustls::version::TLS13])?
             .with_client_cert_verifier(verifier)
             .with_single_cert(cert, key)?;
-        config.alpn_protocols = vec![b"everywhere/1".to_vec()];
+        config.alpn_protocols = vec![PROTOCOL.to_vec()];
         config.send_tls13_tickets = 0;
         Ok(Arc::new(config))
     }
@@ -132,7 +135,7 @@ impl Identity {
                 .with_protocol_versions(&[&rustls::version::TLS13])?
                 .with_root_certificates(self.roots()?)
                 .with_client_auth_cert(cert, key)?;
-        config.alpn_protocols = vec![b"everywhere/1".to_vec()];
+        config.alpn_protocols = vec![PROTOCOL.to_vec()];
         config.resumption = rustls::client::Resumption::disabled();
         Ok(Arc::new(config))
     }

@@ -33,7 +33,9 @@ enum Packet<T> {
 }
 
 async fn packet<S: AsyncWrite + Unpin, T: Serialize>(
-    stream: &mut S, value: &Packet<T>, timing: Timing,
+    stream: &mut S,
+    value: &Packet<T>,
+    timing: Timing,
 ) -> Result<()> {
     let bytes = serde_json::to_vec(value)?;
     ensure!(bytes.len() <= MAX_FRAME, "frame too large");
@@ -41,18 +43,22 @@ async fn packet<S: AsyncWrite + Unpin, T: Serialize>(
         stream.write_u32(bytes.len() as u32).await?;
         stream.write_all(&bytes).await?;
         stream.flush().await
-    }).await??;
+    })
+    .await??;
     Ok(())
 }
 
 pub(crate) async fn send<S: AsyncWrite + Unpin, T: Serialize>(
-    stream: &mut S, value: T, timing: Timing,
+    stream: &mut S,
+    value: T,
+    timing: Timing,
 ) -> Result<()> {
     packet(stream, &Packet::Ready(value), timing).await
 }
 
 pub(crate) async fn read<S: AsyncRead + Unpin, T: DeserializeOwned>(
-    stream: &mut S, timing: Timing,
+    stream: &mut S,
+    timing: Timing,
 ) -> Result<T> {
     timeout(timing.operation, async {
         loop {
@@ -64,7 +70,8 @@ pub(crate) async fn read<S: AsyncRead + Unpin, T: DeserializeOwned>(
                 return Ok(value);
             }
         }
-    }).await?
+    })
+    .await?
 }
 
 pub(crate) async fn work<S, T, F>(stream: &mut S, timing: Timing, operation: F) -> Result<T>
@@ -73,9 +80,17 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
-    // Regression baseline: disk work without a progress notification.
-    let _ = (stream, timing.heartbeat);
-    tokio::task::spawn_blocking(operation).await?
+    let mut task = tokio::task::spawn_blocking(operation);
+    let mut ticks = tokio::time::interval(timing.heartbeat);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    timeout(timing.operation, async {
+        loop {
+            tokio::select! {
+                result = &mut task => return result?,
+                _ = ticks.tick() => packet::<_, ()>(stream, &Packet::Busy, timing).await?,
+            }
+        }
+    }).await?
 }
 
 #[cfg(test)]
@@ -97,7 +112,8 @@ mod tests {
             let value = work(&mut writer, timing(), || {
                 std::thread::sleep(Duration::from_millis(750));
                 Ok(42u64)
-            }).await?;
+            })
+            .await?;
             send(&mut writer, value, timing()).await
         };
         let (sent, received) = tokio::join!(send_result, read::<_, u64>(&mut reader, timing()));

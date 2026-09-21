@@ -136,7 +136,10 @@ fn recovery_directory(parent: &Path) -> Result<PathBuf> {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
     }
-    ensure!(fs::symlink_metadata(&path)?.file_type().is_dir(), "unsafe recovery directory");
+    ensure!(
+        fs::symlink_metadata(&path)?.file_type().is_dir(),
+        "unsafe recovery directory"
+    );
     Ok(path)
 }
 
@@ -151,7 +154,9 @@ fn prepare_install(
 ) -> Result<PathBuf> {
     let parent = target.parent().context("target has no parent")?;
     let recovery = recovery_directory(parent)?;
-    let recovery_id = blake3::hash(&rcgen::KeyPair::generate()?.serialize_der()).to_hex().to_string();
+    let recovery_id = blake3::hash(&rcgen::KeyPair::generate()?.serialize_der())
+        .to_hex()
+        .to_string();
     let directory = recovery.join(&recovery_id);
     fs::create_dir(&directory)?;
     // Also preflight hard-link support before touching the user's target.
@@ -161,14 +166,23 @@ fn prepare_install(
         original: original.clone(),
         incoming: incoming.clone(),
     };
-    let mut record = OpenOptions::new().create_new(true).write(true).open(directory.join("record.json"))?;
-    serde_json::to_writer(&mut record, &serde_json::json!({
-        "target": target.file_name(), "intent": intent,
-    }))?;
+    let mut record = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(directory.join("record.json"))?;
+    serde_json::to_writer(
+        &mut record,
+        &serde_json::json!({
+            "target": target.file_name(), "intent": intent,
+        }),
+    )?;
     record.sync_all()?;
     sync_dir(&directory)?;
     sync_dir(&recovery)?;
-    let mut file = OpenOptions::new().create_new(true).write(true).open(intent_path)?;
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(intent_path)?;
     serde_json::to_writer(&mut file, &intent)?;
     file.sync_all()?;
     sync_dir(parent)?;
@@ -183,17 +197,30 @@ fn recover_install(target: &Path, intent_path: &Path, incoming: &Manifest) -> Re
     if !regular(intent_path)? {
         return Ok(());
     }
-    let intent: InstallIntent = serde_json::from_reader(File::open(intent_path)?.take(160 * 1024 * 1024))?;
-    ensure!(valid_hash(&intent.recovery_id), "invalid recovery identifier");
-    ensure!(intent.incoming == *incoming, "install intent manifest mismatch");
+    let intent: InstallIntent =
+        serde_json::from_reader(File::open(intent_path)?.take(160 * 1024 * 1024))?;
+    ensure!(
+        valid_hash(&intent.recovery_id),
+        "invalid recovery identifier"
+    );
+    ensure!(
+        intent.incoming == *incoming,
+        "install intent manifest mismatch"
+    );
     intent.original.validate()?;
     let parent = target.parent().context("target has no parent")?;
     let recovery = recovery_directory(parent)?;
     let directory = recovery.join(&intent.recovery_id);
-    ensure!(fs::symlink_metadata(&directory)?.file_type().is_dir(), "unsafe recovery entry");
+    ensure!(
+        fs::symlink_metadata(&directory)?.file_type().is_dir(),
+        "unsafe recovery entry"
+    );
     let displaced = directory.join("previous");
     if !regular(target)? {
-        ensure!(regular(&displaced)?, "interrupted install has no recoverable original");
+        ensure!(
+            regular(&displaced)?,
+            "interrupted install has no recoverable original"
+        );
         // Atomic no-clobber restore. A newly created local file wins the race.
         match fs::hard_link(&displaced, target) {
             Ok(()) => sync_dir(parent)?,
@@ -336,6 +363,10 @@ impl Receiver {
         Ok(())
     }
     pub fn finish(&mut self) -> Result<()> {
+        self.finish_checked(|| Ok(()))
+    }
+
+    pub(crate) fn finish_checked(&mut self, authorize: impl Fn() -> Result<()>) -> Result<()> {
         ensure!(!self.finished, "receiver already complete");
         let intent_path = self.journal_path.with_extension("install");
         recover_install(&self.target, &intent_path, &self.manifest)?;
@@ -393,16 +424,24 @@ impl Receiver {
             snapshot(&self.target)? == self.original,
             "target changed before install"
         );
+        authorize()?;
         if let Some(old) = &self.original {
             let displaced = prepare_install(
-                &self.target, &self.part_path, &intent_path, old, &self.manifest,
+                &self.target,
+                &self.part_path,
+                &intent_path,
+                old,
+                &self.manifest,
             )?;
             if snapshot(&displaced)?.as_ref() != Some(old) {
                 // Keep a concurrently saved replacement at its original name
                 // when possible, and retain its real file in recovery in all cases.
                 let _ = fs::hard_link(&displaced, &self.target);
                 sync_dir(parent)?;
-                anyhow::bail!("target changed at install; local content preserved at {}", displaced.display());
+                anyhow::bail!(
+                    "target changed at install; local content preserved at {}",
+                    displaced.display()
+                );
             }
         }
         // Unlike rename, hard_link never replaces an entry that appeared after
@@ -460,9 +499,13 @@ mod install_tests {
         let mut receiver = Receiver::open(&target, manifest.clone()).unwrap();
         receiver.put(0, b"incoming").unwrap();
         let displaced = prepare_install(
-            &target, &receiver.part_path, &receiver.journal_path.with_extension("install"),
-            receiver.original.as_ref().unwrap(), &manifest,
-        ).unwrap();
+            &target,
+            &receiver.part_path,
+            &receiver.journal_path.with_extension("install"),
+            receiver.original.as_ref().unwrap(),
+            &manifest,
+        )
+        .unwrap();
         assert!(!target.exists());
         drop(receiver);
         let mut resumed = Receiver::open(&target, manifest).unwrap();
@@ -484,9 +527,13 @@ mod install_tests {
         let mut receiver = Receiver::open(&target, manifest.clone()).unwrap();
         receiver.put(0, b"incoming").unwrap();
         let displaced = prepare_install(
-            &target, &receiver.part_path, &receiver.journal_path.with_extension("install"),
-            receiver.original.as_ref().unwrap(), &manifest,
-        ).unwrap();
+            &target,
+            &receiver.part_path,
+            &receiver.journal_path.with_extension("install"),
+            receiver.original.as_ref().unwrap(),
+            &manifest,
+        )
+        .unwrap();
         fs::write(&target, b"concurrent save").unwrap();
         drop(receiver);
         assert!(Receiver::open(&target, manifest).is_err());
