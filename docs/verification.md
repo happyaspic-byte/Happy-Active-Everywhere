@@ -72,3 +72,15 @@ SHA-256: `91f2ba191af80a72e75595bb4f4b1e5f50a6e0368b356f289829c9b31c382b45`.
 본 문서와 저장소 테스트·실측 JSON은 지속 보존용 결과다.
 
 인덱스·복원 추가 검증 로그: `versions-red.log`, `versions-green.log`, `index-red.log`, `index-cli-red.log`, `index-path-red.log`, `restore-red.log`, `index-restore-tests.log`, `index-clippy.log`.
+
+## 10만 작은 파일 로컬 인덱스 실측
+
+`python3 scripts/bench_index.py --binary target/release/everywhere --work-dir "$TMPDIR" --files 100000 --report "$TMPDIR/everywhere-index-100k.json"`
+
+- 최초 스캔 10.5116초, 변경 없는 전체 재검사 10.3046초.
+- 최초 스캔 프로세스 최대 RSS 35,880,960 bytes (34.22 MiB).
+- 10만 개 가변 길이 ASCII 합성 파일, 최근 생성된 캐시 미통제 조건.
+- 실제 `folder-init`·`scan` CLI 경로 실행. 독립 경로 목록+SHA-256 집계로 누락 0·내용 불일치 0.
+- 원본·검사 후 집계 SHA-256: `64d510240464bb4bac886b0c3b6f167933f462c1489393e8617e9cefb97d1fb3`.
+- 이 결과는 로컬 인덱스 측정이다. 작은 파일의 네트워크 동기화와 상주 에이전트 유휴 RSS는 미검증.
+- [실측 JSON](benchmarks/macos-index-100k.json).
