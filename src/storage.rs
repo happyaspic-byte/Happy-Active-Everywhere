@@ -39,8 +39,12 @@ fn regular(path: &Path) -> Result<bool> {
 impl Manifest {
     pub fn from_path(path: &Path) -> Result<Self> {
         ensure!(regular(path)?, "source missing");
-        let mut file = File::open(path)?;
+        Self::from_file(File::open(path)?)
+    }
+
+    pub(crate) fn from_file(mut file: File) -> Result<Self> {
         let before = file.metadata()?;
+        ensure!(before.is_file(), "source must be a regular file");
         let size = before.len();
         ensure!(size <= MAX_SIZE, "file exceeds 1 TiB alpha limit");
         let mut full = blake3::Hasher::new();

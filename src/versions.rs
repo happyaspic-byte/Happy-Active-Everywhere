@@ -28,9 +28,14 @@ pub enum Decision {
 }
 impl Clock {
     pub fn validate(&self) -> Result<()> {
-        ensure!(!self.0.is_empty() && self.0.len() <= 128, "invalid clock size");
         ensure!(
-            self.0.iter().all(|(device, counter)| !device.is_empty() && device.len() <= 128 && *counter > 0),
+            !self.0.is_empty() && self.0.len() <= 128,
+            "invalid clock size"
+        );
+        ensure!(
+            self.0
+                .iter()
+                .all(|(device, counter)| !device.is_empty() && device.len() <= 128 && *counter > 0),
             "invalid clock entry"
         );
         Ok(())

@@ -30,13 +30,6 @@ jobs:
           rustc --version --verbose
           cargo --version
       - name: Format
-        # Temporary dependency resolution gate; the changed lockfile is reviewed
-        # and committed before any candidate can pass the clean-tree check.
-        # Removed once the reviewed dependency update is locked.
-        run: |
-          cargo check --all-targets
-          python -c "import base64,pathlib; print('REVIEW_LOCKFILE=' + base64.b64encode(pathlib.Path('Cargo.lock').read_bytes()).decode())"
-      - name: Check committed formatting and dependency lock
         run: |
           cargo fmt --all
           git diff --exit-code

@@ -47,12 +47,21 @@ impl Versions {
     }
 
     pub fn join(&self, other: &Self) -> Result<Self> {
-        ensure!(self.heads.len() <= 128 && other.heads.len() <= 128, "too many concurrent versions");
+        ensure!(
+            self.heads.len() <= 128 && other.heads.len() <= 128,
+            "too many concurrent versions"
+        );
         let mut candidates = Vec::new();
         for revision in self.heads.iter().chain(&other.heads) {
             revision.clock.validate()?;
             if let Content::File(hash) = &revision.content {
-                ensure!(hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()), "invalid content hash");
+                ensure!(
+                    hash.len() == 64
+                        && hash
+                            .bytes()
+                            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+                    "invalid content hash"
+                );
             }
             candidates.push((revision.id()?, revision.clone()));
         }
@@ -60,12 +69,21 @@ impl Versions {
         candidates.dedup_by(|a, b| a.0 == b.0);
         for (_, a) in &candidates {
             for (_, b) in &candidates {
-                ensure!(a.clock.relation(&b.clock) != Relation::Equal || a.content == b.content, "equal clock with different content");
+                ensure!(
+                    a.clock.relation(&b.clock) != Relation::Equal || a.content == b.content,
+                    "equal clock with different content"
+                );
             }
         }
-        let heads: Vec<_> = candidates.iter().filter(|(_, candidate)| {
-            !candidates.iter().any(|(_, other)| candidate.clock.relation(&other.clock) == Relation::Before)
-        }).map(|(_, revision)| revision.clone()).collect();
+        let heads: Vec<_> = candidates
+            .iter()
+            .filter(|(_, candidate)| {
+                !candidates
+                    .iter()
+                    .any(|(_, other)| candidate.clock.relation(&other.clock) == Relation::Before)
+            })
+            .map(|(_, revision)| revision.clone())
+            .collect();
         ensure!(heads.len() <= 128, "too many concurrent versions");
         Ok(Self { heads })
     }
