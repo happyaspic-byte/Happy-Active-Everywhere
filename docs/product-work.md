@@ -394,3 +394,12 @@ process without cleanup errors. Its unchanged interval used at most 12,694 TLS
 bytes. Qualification flags remained false. The Rust source is unchanged from
 the 93-test, format and Clippy run recorded above; current-head Actions will
 rerun that full regression alongside the new managed smoke on every OS.
+
+Delivery workflow `35668105650` at `5ffed9d` passed the Ubuntu job and the macOS
+managed smoke, but Windows exposed two harness portability defects: readiness
+stdout retained CRLF in binary mode, and SQLite context managers did not close
+connections, preventing temporary database cleanup. Explicit connection closing
+now covers both read-only helpers and test transactions; readiness uses universal
+newline text mode. A local regression retained real SQLite connections to prove
+they stayed open before correction. All 19 Python checks passed afterward.
+The Windows outcome must be verified by the next exact-head Actions run.

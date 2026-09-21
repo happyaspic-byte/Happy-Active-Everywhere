@@ -1,4 +1,5 @@
 """Independent filesystem, database and elapsed-observation checks."""
+from contextlib import closing
 from dataclasses import dataclass
 import hashlib
 import json
@@ -53,7 +54,7 @@ def assert_manifest(root, expected):
 def index_snapshot(state, folder='soak'):
     path = Path(state) / 'shares' / folder / 'index.sqlite'
     assert path.is_file() and not path.is_symlink(), 'missing or unsafe index'
-    with sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=1) as db:
+    with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=1)) as db:
         db.execute('BEGIN')
         entries = {name: json.loads(versions) for name, versions in
                    db.execute('SELECT path,versions FROM entries ORDER BY path')}
@@ -72,7 +73,7 @@ def index_snapshot(state, folder='soak'):
 def history_rows(state, after=0, folder='soak'):
     path = Path(state) / 'shares' / folder / 'index.sqlite'
     assert path.is_file() and not path.is_symlink(), 'missing or unsafe index'
-    with sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=1) as db:
+    with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=1)) as db:
         return [(rowid, name, identity, json.loads(revision)) for rowid, name, identity, revision in
                 db.execute('SELECT rowid,path,id,revision FROM history WHERE rowid>? ORDER BY rowid',
                            (after,))]

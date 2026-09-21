@@ -1,4 +1,5 @@
 """Negative acceptance checks for the stability test's independent oracle."""
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -12,9 +13,10 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from soak_oracle import (Observation, assert_manifest, assert_reconciled, manifest,
-                         index_snapshot, file_value)
+                         index_snapshot, history_rows, file_value)
 from soak_runtime import Node, Relay, RunLock, owner_is_live, process_alive
 from soak import Controller
 
@@ -88,6 +90,33 @@ class OracleTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_read_only_snapshots_release_their_database_handles(self):
+        binary = Path(__file__).resolve().parents[1] / 'target/debug' / (
+            'everywhere.exe' if os.name == 'nt' else 'everywhere')
+        real_connect = sqlite3.connect
+        connections = []
+        def record_connection(*args, **kwargs):
+            connection = real_connect(*args, **kwargs)
+            connections.append(connection)
+            return connection
+        with tempfile.TemporaryDirectory() as temporary:
+            node = Node(binary, Path(temporary), 'a')
+            try:
+                node.start()
+                (node.root / 'note').write_bytes(b'actual SQLite handle test')
+                node.api({'action': 'scan', 'folder': 'soak'})
+                with patch('soak_oracle.sqlite3.connect', side_effect=record_connection):
+                    self.assertIn('note', index_snapshot(node.state)['entries'])
+                    self.assertEqual(len(history_rows(node.state)), 1)
+                self.assertEqual(len(connections), 2)
+                for connection in connections:
+                    with self.assertRaises(sqlite3.ProgrammingError):
+                        connection.execute('SELECT 1')
+            finally:
+                for connection in connections:
+                    connection.close()
+                node.stop()
+
     def test_quiesce_refuses_new_connections_but_drains_an_existing_exchange(self):
         listener = socket.socket()
         listener.bind(('127.0.0.1', 0)); listener.listen(1); listener.settimeout(5)
@@ -187,9 +216,9 @@ class RuntimeTests(unittest.TestCase):
                 'import sys; from pathlib import Path; from soak_runtime import RunLock; '
                 'lock=RunLock(Path(sys.argv[1])); print("ready", flush=True); sys.stdin.read()',
                 str(path),
-            ], cwd=Path(__file__).parent, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            ], cwd=Path(__file__).parent, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
             try:
-                self.assertEqual(owner.stdout.readline(), b'ready\n')
+                self.assertEqual(owner.stdout.readline(), 'ready\n')
                 self.assertTrue(owner_is_live(path, owner.pid))
                 owner.kill()
                 owner.wait(timeout=5)
@@ -270,14 +299,14 @@ class ControllerTests(unittest.TestCase):
                     controller.converge()
                 controller.verify_retained()
                 path = node.state / 'shares/soak/index.sqlite'
-                with sqlite3.connect(path) as database:
+                with closing(sqlite3.connect(path)) as database, database:
                     saved = database.execute('SELECT path,id,revision FROM history').fetchall()
                     database.execute('DELETE FROM history')
                 self.assertEqual(node.api({'action': 'history', 'folder': 'soak', 'path': 'note'}), [])
                 with self.subTest(fault='deleted'):
                     with self.assertRaises(AssertionError):
                         controller.verify_retained()
-                with sqlite3.connect(path) as database:
+                with closing(sqlite3.connect(path)) as database, database:
                     database.executemany('INSERT INTO history VALUES(?,?,?)', saved)
                     first = json.loads(saved[0][2]); first['clock']['invented'] = 123
                     database.execute('UPDATE history SET revision=? WHERE path=? AND id=?',
