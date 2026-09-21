@@ -228,12 +228,20 @@ async fn main() -> Result<()> {
             let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
             println!("{}", folder.conflicts()?);
         }
-        Command::ShareResolve { share, path, revision } => {
+        Command::ShareResolve {
+            share,
+            path,
+            revision,
+        } => {
             let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
             folder.choose(&path, &revision, false)?;
             println!("resolved");
         }
-        Command::ShareRestore { share, path, revision } => {
+        Command::ShareRestore {
+            share,
+            path,
+            revision,
+        } => {
             let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
             folder.choose(&path, &revision, true)?;
             println!("restored");

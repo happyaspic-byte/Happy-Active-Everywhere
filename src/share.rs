@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -89,9 +89,20 @@ fn read_config(directory: &Path) -> Result<Config> {
         fs::symlink_metadata(&path)?.file_type().is_file(),
         "unsafe share configuration"
     );
-    let bytes = fs::read(path)?;
+    let mut bytes = Vec::new();
+    File::open(path)?.take(128 * 1024 + 1).read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= 128 * 1024, "share configuration too large");
-    Ok(serde_json::from_slice(&bytes)?)
+    let config: Config = serde_json::from_slice(&bytes)?;
+    valid_id(&config.id)?;
+    for value in [&config.identity, &config.epoch, &config.marker] {
+        identity::valid_peer(value)?;
+    }
+    ensure!(config.root.is_absolute(), "share root must be absolute");
+    ensure!(config.peers.len() <= 128, "too many approved peers");
+    for peer in &config.peers {
+        identity::valid_peer(peer)?;
+    }
+    Ok(config)
 }
 pub fn grant(state: &Path, id: &str, peer: &str, remove: bool) -> Result<()> {
     identity::Identity::new(state, peer)?;
@@ -312,7 +323,11 @@ impl Share {
         validate_path(path)?;
         let prior = self.local(path)?;
         // Preserve superseded revisions before replacing the causal register.
-        for revision in prior.iter().flat_map(|l| &l.record.versions.heads).chain(&versions.heads) {
+        for revision in prior
+            .iter()
+            .flat_map(|l| &l.record.versions.heads)
+            .chain(&versions.heads)
+        {
             self.connection.execute(
                 "INSERT OR IGNORE INTO history VALUES(?1,?2,?3)",
                 params![path, revision.id()?, serde_json::to_string(revision)?],
@@ -663,12 +678,7 @@ impl Share {
         } else {
             Some(selected)
         };
-        self.save(
-            path,
-            &local.record.versions,
-            actual,
-            &local.record.versions,
-        )?;
+        self.save(path, &local.record.versions, actual, &local.record.versions)?;
         transaction.commit()?;
         Ok(())
     }
@@ -678,30 +688,52 @@ impl Share {
         self.scan(false)?;
         let local = self.local(path)?.context("unknown path")?;
         let chosen = if historical {
-            let json: String = self.connection.query_row(
-                "SELECT revision FROM history WHERE path=?1 AND id=?2",
-                params![path, revision], |r| r.get(0),
-            ).optional()?.context("unknown historical revision")?;
+            let json: String = self
+                .connection
+                .query_row(
+                    "SELECT revision FROM history WHERE path=?1 AND id=?2",
+                    params![path, revision],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .context("unknown historical revision")?;
             serde_json::from_str::<Revision>(&json)?
         } else {
-            local.record.versions.heads.iter().find(|r| r.id().is_ok_and(|id| id == revision))
-                .cloned().context("revision is no longer a current conflict head")?
+            local
+                .record
+                .versions
+                .heads
+                .iter()
+                .find(|r| r.id().is_ok_and(|id| id == revision))
+                .cloned()
+                .context("revision is no longer a current conflict head")?
         };
         if let Content::File(hash) = &chosen.content {
-            ensure!(Manifest::from_path(&self.object_path(hash)?)?.hash == *hash, "historical content is corrupt");
+            ensure!(
+                Manifest::from_path(&self.object_path(hash)?)?.hash == *hash,
+                "historical content is corrupt"
+            );
         }
-        let versions = local.record.versions.edit(&self.replica(), chosen.content)?;
+        let versions = local
+            .record
+            .versions
+            .edit(&self.replica(), chosen.content)?;
         let actual = self.root.content(path)?;
         let transaction = self.connection.unchecked_transaction()?;
         self.save(path, &versions, actual.as_ref(), &local.observed)?;
-        self.connection.execute("DELETE FROM pending WHERE path=?1", [path])?;
+        self.connection
+            .execute("DELETE FROM pending WHERE path=?1", [path])?;
         transaction.commit()?;
         self.apply_local(path, &self.local(path)?.unwrap())
     }
     pub fn history(&self, path: &str) -> Result<serde_json::Value> {
         validate_path(path)?;
-        let mut statement = self.connection.prepare("SELECT id,revision FROM history WHERE path=?1 ORDER BY id")?;
-        let rows = statement.query_map([path], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut statement = self
+            .connection
+            .prepare("SELECT id,revision FROM history WHERE path=?1 ORDER BY id")?;
+        let rows = statement.query_map([path], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
         let revisions = rows.map(|row| {
             let (id, json) = row?;
             let revision: Revision = serde_json::from_str(&json)?;

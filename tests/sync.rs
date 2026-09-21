@@ -336,20 +336,43 @@ fn explicit_conflict_resolution_and_historical_restore_converge() {
     fs::write(b.root.join("note"), b"edit b").unwrap();
     sync(&a, &b);
     let conflicts: Value = serde_json::from_str(&a.command("share-conflicts", &[])).unwrap();
-    let choice = conflicts[0]["revisions"].as_array().unwrap().iter().find(|r| {
-        fs::read(r["object_path"].as_str().unwrap()).unwrap() == b"edit b"
-    }).unwrap()["id"].as_str().unwrap().to_owned();
+    let choice = conflicts[0]["revisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| fs::read(r["object_path"].as_str().unwrap()).unwrap() == b"edit b")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     a.command("share-resolve", &["--path", "note", "--revision", &choice]);
     sync(&a, &b);
     for node in [&a, &b] {
         assert_eq!(fs::read(node.root.join("note")).unwrap(), b"edit b");
-        assert_eq!(head_state(node, "note")["heads"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            head_state(node, "note")["heads"].as_array().unwrap().len(),
+            1
+        );
     }
-    let history: Value = serde_json::from_str(&a.command("share-history", &["--path", "note"])).unwrap();
-    let original = history.as_array().unwrap().iter().find(|r| {
-        r["object_path"].as_str().is_some_and(|p| fs::read(p).unwrap() == b"original")
-    }).unwrap()["id"].as_str().unwrap().to_owned();
-    a.command("share-restore", &["--path", "note", "--revision", &original]);
+    let history: Value =
+        serde_json::from_str(&a.command("share-history", &["--path", "note"])).unwrap();
+    let original = history
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| {
+            r["object_path"]
+                .as_str()
+                .is_some_and(|p| fs::read(p).unwrap() == b"original")
+        })
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    a.command(
+        "share-restore",
+        &["--path", "note", "--revision", &original],
+    );
     sync(&a, &b);
     assert_eq!(fs::read(a.root.join("note")).unwrap(), b"original");
     assert_eq!(fs::read(b.root.join("note")).unwrap(), b"original");
@@ -366,7 +389,14 @@ fn missing_mount_marker_never_creates_deletion_revisions() {
     let marker = fs::read(node.root.join(".everywhere-folder")).unwrap();
     fs::remove_file(node.root.join(".everywhere-folder")).unwrap();
     fs::remove_file(node.root.join("note")).unwrap();
-    let output = run(&["share-approve-deletes", "--state", s(&node.state), "--folder", "personal", "--all"]);
+    let output = run(&[
+        "share-approve-deletes",
+        "--state",
+        s(&node.state),
+        "--folder",
+        "personal",
+        "--all",
+    ]);
     assert!(!output.status.success());
     fs::write(node.root.join(".everywhere-folder"), marker).unwrap();
     assert_eq!(head_state(&node, "note"), before);
@@ -382,10 +412,17 @@ fn malformed_epoch_reports_error_instead_of_panicking() {
     fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
     // A matching corrupt DB value must still fail configuration validation.
     let db = rusqlite::Connection::open(node.state.join("shares/personal/index.sqlite")).unwrap();
-    db.execute("UPDATE meta SET value='x' WHERE key='epoch'", []).unwrap();
+    db.execute("UPDATE meta SET value='x' WHERE key='epoch'", [])
+        .unwrap();
     drop(db);
     fs::write(node.root.join("note"), b"keep").unwrap();
-    let result = run(&["share-scan", "--state", s(&node.state), "--folder", "personal"]);
+    let result = run(&[
+        "share-scan",
+        "--state",
+        s(&node.state),
+        "--folder",
+        "personal",
+    ]);
     assert!(!result.status.success());
     assert!(!String::from_utf8_lossy(&result.stderr).contains("panicked"));
 }

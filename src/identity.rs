@@ -13,7 +13,7 @@ use std::{
 pub fn fingerprint(der: &[u8]) -> String {
     blake3::hash(der).to_hex().to_string()
 }
-fn valid_peer(peer: &str) -> Result<()> {
+pub(crate) fn valid_peer(peer: &str) -> Result<()> {
     ensure!(
         peer.len() == 64
             && peer

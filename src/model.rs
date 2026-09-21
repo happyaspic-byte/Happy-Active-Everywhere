@@ -38,7 +38,7 @@ impl Versions {
             .heads
             .iter()
             .fold(Clock::default(), |v, h| v.merge(&h.clock));
-        Ok(Self {
+        Self::default().join(&Self {
             heads: vec![Revision {
                 clock: clock.advance(device)?,
                 content,
@@ -90,7 +90,9 @@ impl Versions {
             .map(|(_, revision)| revision.clone())
             .collect();
         ensure!(heads.len() <= 128, "too many concurrent versions");
-        Ok(Self { heads })
+        let result = Self { heads };
+        ensure!(serde_json::to_vec(&result)?.len() <= 64 * 1024, "version metadata exceeds the per-path limit");
+        Ok(result)
     }
 
     pub fn selected(&self) -> Option<&Revision> {
