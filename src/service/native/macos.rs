@@ -46,10 +46,28 @@ fn own(config: &Config, domain: &str, create: bool) -> Result<PathBuf> {
     }
     ensure_definition(&path, &body, create)?;
     if let Some(runtime) = loaded(domain, &config.id)? {
-        let marker = format!("path = {}", path.display());
+        let marker = format!("\tpath = {}", path.display());
+        let program = format!("\tprogram = {}", config.bootstrap.display());
+        let expected = [
+            config.bootstrap.to_str().unwrap(),
+            "service",
+            "run",
+            "--state",
+            config.state.to_str().unwrap(),
+        ];
+        let arguments = runtime
+            .split_once("\n\targuments = {\n")
+            .and_then(|(_, rest)| rest.split_once("\n\t}"))
+            .map(|(body, _)| {
+                body.lines()
+                    .map(|line| line.strip_prefix("\t\t").unwrap_or(""))
+                    .collect::<Vec<_>>()
+            });
         ensure!(
-            runtime.lines().any(|line| line.trim() == marker),
-            "launchd label belongs to another definition"
+            runtime.lines().any(|line| line == marker)
+                && runtime.lines().any(|line| line == program)
+                && arguments.as_deref() == Some(expected.as_slice()),
+            "launchd loaded command belongs to another definition; preserving it"
         );
     }
     Ok(path)

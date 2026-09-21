@@ -10,7 +10,6 @@ fn quote(value: &str) -> String {
             .replace('\\', "\\\\")
             .replace('"', "\\\"")
             .replace('%', "%%")
-            .replace('$', "$$")
     )
 }
 fn definition(config: &Config) -> Result<(PathBuf, String)> {
@@ -21,7 +20,7 @@ fn definition(config: &Config) -> Result<(PathBuf, String)> {
     valid_path(&base)?;
     let path = base.join("systemd/user").join(unit(config));
     let body = format!(
-        "[Unit]\nDescription=Happy Active Everywhere {}\n\n[Service]\nType=simple\nExecStart={} service run --state {}\nRestart=always\nRestartSec=3\nTimeoutStopSec=20\nKillMode=control-group\nUMask=0077\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=Happy Active Everywhere {}\n\n[Service]\nType=simple\nExecStart=:{} service run --state {}\nRestart=always\nRestartSec=3\nTimeoutStopSec=20\nKillMode=control-group\nUMask=0077\n\n[Install]\nWantedBy=default.target\n",
         config.id,
         quote(config.bootstrap.to_str().unwrap()),
         quote(config.state.to_str().unwrap())
@@ -35,7 +34,7 @@ fn inspect(config: &Config) -> Result<String> {
             "--user",
             "show",
             &unit(config),
-            "--property=LoadState,ActiveState,UnitFileState,FragmentPath,MainPID",
+            "--property=LoadState,ActiveState,UnitFileState,FragmentPath,MainPID,DropInPaths",
         ],
     )?;
     let body = String::from_utf8(output.stdout)?;
@@ -58,7 +57,52 @@ fn own(config: &Config, create: bool) -> Result<PathBuf> {
         "systemd unit belongs to another definition"
     );
     ensure_definition(&path, &body, create)?;
+    if !fragment.is_empty() {
+        ensure!(
+            state.lines().any(|s| s == "DropInPaths="),
+            "systemd unit has overrides; preserving it"
+        );
+        verify_command(config)?;
+    }
     Ok(path)
+}
+fn bus_json(args: &[&str]) -> Result<Value> {
+    let mut argv = vec!["--user", "--json=short"];
+    argv.extend_from_slice(args);
+    Ok(serde_json::from_str(&checked("busctl", &argv)?)?)
+}
+fn verify_command(config: &Config) -> Result<()> {
+    let object = bus_json(&[
+        "call",
+        "org.freedesktop.systemd1",
+        "/org/freedesktop/systemd1",
+        "org.freedesktop.systemd1.Manager",
+        "GetUnit",
+        "s",
+        &unit(config),
+    ])?;
+    let path = object["data"][0]
+        .as_str()
+        .context("invalid systemd unit object")?;
+    let command = bus_json(&[
+        "get-property",
+        "org.freedesktop.systemd1",
+        path,
+        "org.freedesktop.systemd1.Service",
+        "ExecStart",
+    ])?;
+    let commands = command["data"]
+        .as_array()
+        .context("invalid systemd ExecStart")?;
+    let expected = json!([config.bootstrap, "service", "run", "--state", config.state]);
+    ensure!(
+        commands.len() == 1
+            && commands[0][0] == json!(config.bootstrap)
+            && commands[0][1] == expected
+            && commands[0][2] == false,
+        "systemd loaded command belongs to another definition; preserving it"
+    );
+    Ok(())
 }
 pub(crate) fn install(config: &Config) -> Result<()> {
     let (path, _) = definition(config)?;

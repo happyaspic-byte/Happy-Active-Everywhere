@@ -258,6 +258,8 @@ enum ServiceCommand {
     Run {
         #[arg(long)]
         state: PathBuf,
+        #[arg(long, hide = true)]
+        parent_watch: bool,
     },
 }
 #[derive(Args)]
@@ -279,8 +281,17 @@ async fn main() -> Result<()> {
             println!("{}", everywhere::service::install(&state, &prefix, listen)?);
         }
         Command::Service {
-            action: ServiceCommand::Run { state },
-        } => everywhere::service::run(&state)?,
+            action:
+                ServiceCommand::Run {
+                    state,
+                    parent_watch,
+                },
+        } => {
+            if parent_watch {
+                everywhere::jobs::watch_parent();
+            }
+            everywhere::service::run(&state)?;
+        }
         Command::Service { action } => {
             use everywhere::service::Action;
             let (args, operation) = match action {

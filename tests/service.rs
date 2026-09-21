@@ -129,7 +129,7 @@ impl Node {
     }
 }
 fn installed(base: &Path) -> PathBuf {
-    let prefix = base.join("installed α $HOME 100% 'quote'");
+    let prefix = base.join("installed α $HOME %USERNAME% 'quote'");
     fs::create_dir(&prefix).unwrap();
     fs::create_dir(prefix.join("versions")).unwrap();
     fs::write(
@@ -400,4 +400,23 @@ fn unreadable_service_state_is_an_error_not_an_uninstalled_service() {
         );
         assert!(a.state.join("service/config.json").is_file());
     });
+}
+
+#[cfg(windows)]
+#[test]
+fn scheduler_query_errors_are_not_missing_registration() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-File"])
+        .arg(repo.join("scripts/verify-task-query.ps1"))
+        .arg("-Helper")
+        .arg(repo.join("src/service/task.ps1"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

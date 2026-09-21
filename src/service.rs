@@ -28,7 +28,8 @@ fn wait_ready(state: &Path, expected: bool) -> Result<()> {
     let deadline = std::time::Instant::now() + Duration::from_secs(25);
     loop {
         let status = local_status(state)?;
-        if (expected && status["healthy"] == true) || (!expected && status["runner_live"] == false)
+        if (expected && status["healthy"] == true)
+            || (!expected && status["runner_live"] == false && status["manager_lock_held"] == false)
         {
             return Ok(());
         }
@@ -58,8 +59,9 @@ fn report(config: &Config) -> Result<Value> {
     Ok(result)
 }
 pub fn install(state: &Path, prefix: &Path, listen: SocketAddr) -> Result<Value> {
-    let config = configure(state, prefix, listen)?;
-    let _lifecycle = lock(&config.state.join("service.lock"))?;
+    let state = state.canonicalize()?;
+    let _lifecycle = lock(&state.join("service.lock"))?;
+    let config = configure_locked(&state, prefix, listen)?;
     verify_bootstrap(&config)?;
     native::install(&config)?;
     native::start(&config)?;
@@ -339,6 +341,12 @@ fn load(state: &Path) -> Result<Config> {
 }
 /// Prepare immutable deployment state; the native installer calls this before registration.
 pub fn configure(state: &Path, prefix: &Path, listen: SocketAddr) -> Result<Config> {
+    let state = state.canonicalize()?;
+    let _lifecycle = lock(&state.join("service.lock"))?;
+    configure_locked(&state, prefix, listen)
+}
+// Caller retains service.lock across configuration AND native registration.
+fn configure_locked(state: &Path, prefix: &Path, listen: SocketAddr) -> Result<Config> {
     ensure!(
         listen.ip().is_loopback() && listen.port() != 0,
         "service requires a fixed loopback address"
@@ -363,7 +371,6 @@ pub fn configure(state: &Path, prefix: &Path, listen: SocketAddr) -> Result<Conf
         bootstrap,
         listen,
     };
-    let _lifecycle = lock(&state.join("service.lock"))?;
     private_dir(&state.join("service"))?;
     let path = state.join("service/config.json");
     if exists(&path)? {
@@ -444,15 +451,17 @@ pub fn run(state: &Path) -> Result<()> {
     anyhow::bail!("managed process exited ({result}); native service supervision may restart it")
 }
 fn runner_live(state: &Path) -> Result<bool> {
-    let path = state.join("service/run.lock");
-    if !exists(&path)? {
+    lock_held(&state.join("service/run.lock"))
+}
+fn lock_held(path: &Path) -> Result<bool> {
+    if !exists(path)? {
         return Ok(false);
     }
-    regular(&path)?;
+    regular(path)?;
     let file = OpenOptions::new().read(true).write(true).open(path)?;
     match file.try_lock_exclusive() {
         Ok(()) => Ok(false),
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+        Err(e) if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() => Ok(true),
         Err(e) => Err(e.into()),
     }
 }
@@ -494,6 +503,6 @@ pub fn local_status(state: &Path) -> Result<Value> {
     let manager_pid = response.as_ref().and_then(|v| v["pid"].as_u64());
     let recorded = record.as_ref().and_then(|v| v["manager_pid"].as_u64());
     Ok(
-        json!({"id":config.id,"state":config.state,"listen":config.listen,"runner_live":live,"manager_pid":manager_pid,"healthy":live && manager_pid.is_some() && manager_pid==recorded,"log":config.state.join("service/output.log")}),
+        json!({"id":config.id,"state":config.state,"listen":config.listen,"runner_live":live,"manager_lock_held":lock_held(&config.state.join("management.lock"))?,"manager_pid":manager_pid,"healthy":live && manager_pid.is_some() && manager_pid==recorded,"log":config.state.join("service/output.log")}),
     )
 }

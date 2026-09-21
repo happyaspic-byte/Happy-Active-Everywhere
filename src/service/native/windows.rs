@@ -44,7 +44,10 @@ fn file(config: &Config, prefix: &str, extension: &str, bytes: &[u8]) -> Result<
     Ok(path)
 }
 fn call(config: &Config, action: &str) -> Result<Value> {
-    let arguments = format!("service run --state {}", quote(&normal(&config.state)?));
+    let arguments = format!(
+        "service run --parent-watch --state {}",
+        quote(&normal(&config.state)?)
+    );
     let owner = format!(
         "Everywhere {}",
         blake3::hash(&serde_json::to_vec(config)?).to_hex()

@@ -23,7 +23,7 @@ commands = []
 server = None
 installed = False
 failure = None
-state = base / 'a-state'
+state = base / "a-state α $HOME %USERNAME% 'quote'"
 
 def run(argv, success=True):
     result = subprocess.run([str(x) for x in argv], capture_output=True, text=True, timeout=150)
@@ -66,6 +66,20 @@ def api(path):
             return json.load(response)
     except (OSError, ValueError):
         return None
+
+def process_alive(pid):
+    if os.name == 'nt':
+        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+            f'if (Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue) {{ exit 0 }} else {{ exit 1 }}'], timeout=15)
+        return result.returncode == 0
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+def active_processes():
+    return [api('/api/health')['pid'], *[j['pid'] for j in api('/api/status')['jobs'] if j['running']]]
 
 def foreign_registration(status):
     """Changing an owned fixture into a foreign definition must block control."""
@@ -116,6 +130,49 @@ if ($Restore) {
             if saved.exists():
                 run([*argv, '-Restore'])
 
+def foreign_runtime(status):
+    """An unchanged source file does not prove the loaded command is ours."""
+    backend = status['native']['backend']
+    if backend == 'task-scheduler':
+        return  # task ownership is queried from the live scheduler above
+    service('stop')
+    definition = Path(status['native']['definition'])
+    original = definition.read_bytes()
+    if backend == 'launchd':
+        import plistlib
+        domain = f'gui/{os.getuid()}'
+        target = domain + '/' + status['id']
+        try:
+            changed = plistlib.loads(original)
+            changed['ProgramArguments'] = ['/bin/sleep', '300']
+            definition.write_bytes(plistlib.dumps(changed))
+            run(['/bin/launchctl', 'enable', target])
+            run(['/bin/launchctl', 'bootstrap', domain, definition])
+            definition.write_bytes(original)
+            live = run(['/bin/launchctl', 'print', target])
+            assert 'program = /bin/sleep' in live
+            service('stop', success=False)
+            assert 'program = /bin/sleep' in run(['/bin/launchctl', 'print', target])
+        finally:
+            subprocess.run(['/bin/launchctl', 'bootout', target], capture_output=True, timeout=25)
+            definition.write_bytes(original)
+    else:
+        override = definition.with_name(definition.name + '.d')
+        override.mkdir()
+        change = override / '10-foreign.conf'
+        try:
+            change.write_text('[Service]\nExecStart=\nExecStart=/bin/sleep 300\n')
+            run(['systemctl', '--user', 'daemon-reload'])
+            run(['systemctl', '--user', 'start', definition.name])
+            service('stop', success=False)
+            assert 'path=/bin/sleep' in run(['systemctl', '--user', 'show', definition.name, '--property=ExecStart'])
+            run(['systemctl', '--user', 'is-active', definition.name])
+        finally:
+            subprocess.run(['systemctl', '--user', 'stop', definition.name], capture_output=True, timeout=25)
+            change.unlink(); override.rmdir()
+            run(['systemctl', '--user', 'daemon-reload'])
+    service('start')
+
 try:
     other = base / 'b-state'
     aroot, broot = base / 'a-files', base / 'b-files'
@@ -125,7 +182,7 @@ try:
         cli('trust', '--state', own, '--cert', peer / 'identity.der')
         cli('share-init', '--state', own, '--folder', 'personal', '--root', root)
         cli('share-peer', '--state', own, '--folder', 'personal', '--peer', peer_id)
-    prefix = base / "installed α $HOME 100% 'quote'"
+    prefix = base / "installed α $HOME %USERNAME% 'quote'"
     package = base / 'package'; package.mkdir()
     name = 'everywhere.exe' if os.name == 'nt' else 'everywhere'
     shutil.copy2(binary, package / name)
@@ -163,9 +220,12 @@ try:
     again = service('install', '--prefix', prefix, '--listen', f'127.0.0.1:{port}')
     assert again['healthy'] and api('/api/health')['pid'] == initial_pid
     foreign_registration(status)
+    foreign_runtime(status)
+    processes = active_processes()
     stopped = service('stop')
     assert not stopped['healthy'] and not stopped['runner_live'] and not stopped['native']['enabled'], stopped
     assert api('/api/health') is None
+    assert not any(process_alive(pid) for pid in processes), 'stop returned with surviving managed processes'
     second = payload(broot / 'note', 'changed while service stopped')
     assert sha(aroot / 'note') == first
     (package / 'VERSION').write_text('service-acceptance-update\n')
@@ -201,9 +261,11 @@ try:
     fourth = payload(broot / 'note', 'native supervisor recovered the manager')
     wait(lambda: sha(aroot / 'note') == fourth)
     assert service('status')['healthy']
+    processes = active_processes()
     removed = service('uninstall'); installed = False
     assert removed['installed'] is False
     assert api('/api/health') is None
+    assert not any(process_alive(pid) for pid in processes), 'uninstall returned with surviving managed processes'
     backend = status['native']['backend']
     if backend == 'launchd':
         assert not Path(status['native']['definition']).exists()
@@ -221,7 +283,7 @@ try:
     assert (state / 'identity.key.der').is_file() and (state / 'jobs.json').is_file()
     assert sha(aroot / 'note') == fourth and sha(broot / 'note') == fourth
     report = {'status': 'passed', 'platform': os.name, 'native_service': status['native']['backend'],
-              'cases': ['install', 'idempotent-install', 'foreign-registration-refused', 'authenticated-health', 'tls-delivery', 'stop', 'start', 'update', 'rollback', 'restart', 'manager-crash', 'uninstall', 'idempotent-uninstall', 'preserved-paused-job', 'preserved-user-data'],
+              'cases': ['install', 'idempotent-install', 'foreign-registration-refused', 'foreign-loaded-command-refused', 'literal-variable-paths', 'authenticated-health', 'tls-delivery', 'stop-and-child-exit', 'start', 'update', 'rollback', 'restart', 'manager-crash', 'uninstall-and-child-exit', 'idempotent-uninstall', 'preserved-paused-job', 'preserved-user-data'],
               'sha256': fourth, 'physical_reboot_verified': False, 'login_cycle_verified': False}
 except BaseException as error:
     failure = error

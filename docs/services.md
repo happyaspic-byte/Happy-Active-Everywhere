@@ -34,10 +34,14 @@ its own service identifier, so separate test devices do not share a registration
   requires that user's GUI login session.
 - Linux uses a systemd user unit under `$XDG_CONFIG_HOME/systemd/user` (normally
   `~/.config/systemd/user`). A reachable user manager/bus is required. The product
+  uses `systemctl` and `busctl` (JSON support, systemd 240+) to inspect the loaded
+  executable and arguments, and refuses units with drop-in overrides.
   does not enable linger, install a root unit or change machine login policy.
 - Windows uses an interactive current-user Scheduled Task, with limited user
   privileges and no stored password. Windows PowerShell's ScheduledTasks module
   and the user's normal script execution policy must permit the local helper.
+  An encoded PowerShell wrapper passes literal paths to the native bootstrap
+  without Task Scheduler expanding `%VARIABLE%`; a parent pipe owns its lifetime.
   Failed tasks retry at one-minute intervals. This is not a pre-login Windows
   system service.
 
@@ -68,6 +72,8 @@ Status distinguishes:
 - `native.registered`, `native.enabled`, `native.running`: OS registration and
   runtime state; installation alone does not prove a running manager.
 - `runner_live`: a bootstrap holds its state lock.
+- `manager_lock_held`: a manager still holds the state lifetime lock; stop waits
+  for both this lock and the bootstrap lock to be released.
 - `healthy`: the live bootstrap's recorded manager PID answers authenticated
   health for this device. An unrelated foreground manager does not satisfy it.
 
@@ -81,6 +87,8 @@ It preserves device credentials, jobs, folders, history, checkpoints and service
 logs. Repeating uninstall is safe. A changed/foreign definition or symlink is
 refused rather than overwritten or stopped; restore the intended registration
 before retrying. Never delete unrelated service-manager entries to repair one.
+Ownership checks include the loaded command, not only the registration's file
+path. Scheduler access/query errors preserve the deployment manifest.
 
 ## Updates and rollback
 
@@ -96,6 +104,9 @@ and verifies the installer's `current` pointer on every launch, so restarts use
 the selected manager version. Do not remove the bootstrap's retained version:
 its path is recorded in `STATE/service/config.json`. Uninstall/reinstall the
 service before removing old versions or changing the deployment layout.
+For services installed by the intermediate `5d7bf3f` review build on Linux or
+Windows, uninstall using that retained build before installing a newer service
+definition. Those initial native definitions are not a stable migration format.
 
 Rolling back across an incompatible state/protocol change is not a data rollback.
 In particular, complete recovery reconciliation before using an older build that
@@ -111,7 +122,12 @@ python3 scripts/verify-service.py --binary target/debug/everywhere \
 The test uses unique temporary devices and a real native registration. It checks
 install/start/stop/restart/uninstall, foreign-registration refusal, installed
 version update/rollback, paused-job preservation, actual manager crash/restart
-and bidirectional TLS content with independent SHA-256. It removes its own
+and bidirectional TLS content with independent SHA-256. Paths contain literal
+`$HOME` and `%USERNAME%`, Unicode, spaces and apostrophes. POSIX tests load a
+foreign command while retaining the original source bytes and require refusal;
+stop/uninstall also check the manager and active worker PIDs. Windows query-error
+classification has a separate injected-boundary test, not an OS ACL test.
+The native test removes its own
 registration in `finally`; failed fixtures and bounded diagnostic reports remain
 for inspection. CI explicitly prepares a user manager on disposable Linux
 runners if needed; that runner setup is not production deployment behavior.
