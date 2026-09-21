@@ -355,3 +355,37 @@ fn explicit_conflict_resolution_and_historical_restore_converge() {
     assert_eq!(fs::read(b.root.join("note")).unwrap(), b"original");
     assert_eq!(head_state(&a, "note"), head_state(&b, "note"));
 }
+
+#[test]
+fn missing_mount_marker_never_creates_deletion_revisions() {
+    let tmp = TempDir::new().unwrap();
+    let node = Node::new(tmp.path(), "a");
+    fs::write(node.root.join("note"), b"keep").unwrap();
+    node.command("share-scan", &[]);
+    let before = head_state(&node, "note");
+    let marker = fs::read(node.root.join(".everywhere-folder")).unwrap();
+    fs::remove_file(node.root.join(".everywhere-folder")).unwrap();
+    fs::remove_file(node.root.join("note")).unwrap();
+    let output = run(&["share-approve-deletes", "--state", s(&node.state), "--folder", "personal", "--all"]);
+    assert!(!output.status.success());
+    fs::write(node.root.join(".everywhere-folder"), marker).unwrap();
+    assert_eq!(head_state(&node, "note"), before);
+}
+
+#[test]
+fn malformed_epoch_reports_error_instead_of_panicking() {
+    let tmp = TempDir::new().unwrap();
+    let node = Node::new(tmp.path(), "a");
+    let config_path = node.state.join("shares/personal/config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&config_path).unwrap()).unwrap();
+    config["epoch"] = Value::String("x".into());
+    fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    // A matching corrupt DB value must still fail configuration validation.
+    let db = rusqlite::Connection::open(node.state.join("shares/personal/index.sqlite")).unwrap();
+    db.execute("UPDATE meta SET value='x' WHERE key='epoch'", []).unwrap();
+    drop(db);
+    fs::write(node.root.join("note"), b"keep").unwrap();
+    let result = run(&["share-scan", "--state", s(&node.state), "--folder", "personal"]);
+    assert!(!result.status.success());
+    assert!(!String::from_utf8_lossy(&result.stderr).contains("panicked"));
+}

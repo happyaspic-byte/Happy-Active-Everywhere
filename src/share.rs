@@ -1,6 +1,6 @@
 use crate::{
     identity,
-    model::{Content, Versions, collision_key, validate_path},
+    model::{Content, Revision, Versions, collision_key, validate_path},
     root::{Root, random_id},
     storage::Manifest,
     versions::Mode,
@@ -213,7 +213,8 @@ impl Share {
         );
         let connection =
             Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-        connection.execute_batch("PRAGMA synchronous=FULL;")?;
+        connection.execute_batch("PRAGMA synchronous=FULL;
+            CREATE TABLE IF NOT EXISTS history(path TEXT NOT NULL,id TEXT NOT NULL,revision TEXT NOT NULL,PRIMARY KEY(path,id));")?;
         let integrity: String = connection.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
         ensure!(
             integrity == "ok",
@@ -310,6 +311,13 @@ impl Share {
     ) -> Result<()> {
         validate_path(path)?;
         let prior = self.local(path)?;
+        // Preserve superseded revisions before replacing the causal register.
+        for revision in prior.iter().flat_map(|l| &l.record.versions.heads).chain(&versions.heads) {
+            self.connection.execute(
+                "INSERT OR IGNORE INTO history VALUES(?1,?2,?3)",
+                params![path, revision.id()?, serde_json::to_string(revision)?],
+            )?;
+        }
         let changed = prior
             .as_ref()
             .is_none_or(|l| l.record.versions != *versions);
@@ -626,39 +634,81 @@ impl Share {
             if pending {
                 continue;
             }
-            let selected = &local
-                .record
-                .versions
-                .selected()
-                .context("empty version set")?
-                .content;
-            let object = match selected {
-                Content::File(hash) => Some(self.object_path(hash)?),
-                _ => None,
-            };
             self.authorize(peer, true)?;
-            self.check_root()?;
-            self.root.apply(
-                &path,
-                local.materialized.as_ref(),
-                selected,
-                object.as_deref(),
-            )?;
-            let transaction = self.connection.unchecked_transaction()?;
-            let actual = if *selected == Content::Deleted {
-                None
-            } else {
-                Some(selected)
-            };
-            self.save(
-                &path,
-                &local.record.versions,
-                actual,
-                &local.record.versions,
-            )?;
-            transaction.commit()?;
+            self.apply_local(&path, &local)?;
         }
         Ok(())
+    }
+    fn apply_local(&self, path: &str, local: &Local) -> Result<()> {
+        let selected = &local
+            .record
+            .versions
+            .selected()
+            .context("empty version set")?
+            .content;
+        let object = match selected {
+            Content::File(hash) => Some(self.object_path(hash)?),
+            _ => None,
+        };
+        self.check_root()?;
+        self.root.apply(
+            path,
+            local.materialized.as_ref(),
+            selected,
+            object.as_deref(),
+        )?;
+        let transaction = self.connection.unchecked_transaction()?;
+        let actual = if *selected == Content::Deleted {
+            None
+        } else {
+            Some(selected)
+        };
+        self.save(
+            path,
+            &local.record.versions,
+            actual,
+            &local.record.versions,
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+    /// Resolve against all observed heads, or restore a locally retained revision.
+    pub fn choose(&self, path: &str, revision: &str, historical: bool) -> Result<()> {
+        validate_path(path)?;
+        self.scan(false)?;
+        let local = self.local(path)?.context("unknown path")?;
+        let chosen = if historical {
+            let json: String = self.connection.query_row(
+                "SELECT revision FROM history WHERE path=?1 AND id=?2",
+                params![path, revision], |r| r.get(0),
+            ).optional()?.context("unknown historical revision")?;
+            serde_json::from_str::<Revision>(&json)?
+        } else {
+            local.record.versions.heads.iter().find(|r| r.id().is_ok_and(|id| id == revision))
+                .cloned().context("revision is no longer a current conflict head")?
+        };
+        if let Content::File(hash) = &chosen.content {
+            ensure!(Manifest::from_path(&self.object_path(hash)?)?.hash == *hash, "historical content is corrupt");
+        }
+        let versions = local.record.versions.edit(&self.replica(), chosen.content)?;
+        let actual = self.root.content(path)?;
+        let transaction = self.connection.unchecked_transaction()?;
+        self.save(path, &versions, actual.as_ref(), &local.observed)?;
+        self.connection.execute("DELETE FROM pending WHERE path=?1", [path])?;
+        transaction.commit()?;
+        self.apply_local(path, &self.local(path)?.unwrap())
+    }
+    pub fn history(&self, path: &str) -> Result<serde_json::Value> {
+        validate_path(path)?;
+        let mut statement = self.connection.prepare("SELECT id,revision FROM history WHERE path=?1 ORDER BY id")?;
+        let rows = statement.query_map([path], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let revisions = rows.map(|row| {
+            let (id, json) = row?;
+            let revision: Revision = serde_json::from_str(&json)?;
+            let object = match &revision.content { Content::File(hash) => Some(self.object_path(hash)?), _ => None };
+            Ok(serde_json::json!({"id":id,"content":revision.content,"clock":revision.clock,"object_path":object}))
+        }).collect::<Result<Vec<_>>>()?;
+        Ok(serde_json::Value::Array(revisions))
     }
     pub fn cursor(&self, peer: &str) -> Result<(String, u64)> {
         let (epoch, sequence): (String, i64) = self

@@ -91,3 +91,13 @@ fn portable_paths_accept_unicode_and_reject_escape_and_alias_names() {
         assert!(validate_path(path).is_err(), "accepted {path:?}");
     }
 }
+
+#[test]
+fn locally_created_versions_obey_the_same_limits_as_remote_versions() {
+    let mut versions = Versions::default();
+    for i in 0..128 {
+        versions = versions.edit(&format!("device-{i}"), file('a')).unwrap();
+    }
+    assert!(versions.edit("device-129", file('a')).is_err());
+    assert!(Versions::default().edit("a", file('z')).is_err());
+}

@@ -52,6 +52,31 @@ enum Command {
     ShareStatus(ShareArgs),
     /// List concurrent revisions and their preserved content objects.
     ShareConflicts(ShareArgs),
+    /// Choose a current conflict revision and propagate the resolution.
+    ShareResolve {
+        #[command(flatten)]
+        share: ShareArgs,
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        revision: String,
+    },
+    /// List locally retained revisions for a relative path.
+    ShareHistory {
+        #[command(flatten)]
+        share: ShareArgs,
+        #[arg(long)]
+        path: String,
+    },
+    /// Restore a retained revision as a new synchronized change.
+    ShareRestore {
+        #[command(flatten)]
+        share: ShareArgs,
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        revision: String,
+    },
     /// Exchange folder changes with one explicitly approved device.
     Sync {
         #[command(flatten)]
@@ -202,6 +227,20 @@ async fn main() -> Result<()> {
         Command::ShareConflicts(share) => {
             let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
             println!("{}", folder.conflicts()?);
+        }
+        Command::ShareResolve { share, path, revision } => {
+            let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
+            folder.choose(&path, &revision, false)?;
+            println!("resolved");
+        }
+        Command::ShareRestore { share, path, revision } => {
+            let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
+            folder.choose(&path, &revision, true)?;
+            println!("restored");
+        }
+        Command::ShareHistory { share, path } => {
+            let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
+            println!("{}", folder.history(&path)?);
         }
         Command::Sync {
             share,

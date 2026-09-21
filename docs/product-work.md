@@ -57,3 +57,31 @@ their actual elapsed duration. Those gates remain unverified until executed.
   physical-filesystem validation before stable release.
 - Protocol 2 explicitly changes framing to include progress heartbeats. Both
   ends must be upgraded; ALPN rejects protocol 1 instead of misreading frames.
+
+## Observed cross-platform checkpoints
+
+- `847620f`: format, Clippy, behavioral tests and release builds passed on
+  Ubuntu, macOS and Windows. Transfer now pipelines up to 16 verified blocks;
+  long disk work emits progress without accepting an indefinitely silent peer.
+- The SQLite minimum-version regression exposed bundled SQLite 3.50.2.
+  Updating rusqlite to 0.40.2 provides SQLite 3.53.2; the runtime assertion passes.
+- `1c64170`: Clippy and every behavioral test passed on all three hosted OSes.
+  Ubuntu ran 43 tests, including six independent-process folder scenarios:
+  bidirectional Unicode/empty content, offline concurrent edits, persistent
+  deletion approval, three-device convergence, concurrent deletion/edit and
+  stale-peer reconnection without resurrection. Formatting failed, so the
+  workflow correctly skipped release artifacts; this is not an all-green build.
+- Folder metadata uses bounded pages, immutable content objects, a SQLite
+  causal index, explicit share ACLs and a capability-scoped filesystem root.
+  Incoming content is verified before publication. Protocol `everywhere/sync/1`
+  is separate from single-file transfer `everywhere/2`.
+- Conflict heads and their content are retained. Explicit conflict resolution
+  and historical restore are being added with a CLI acceptance regression.
+
+## Outstanding product gates
+
+Management UI, managed background jobs, installation/update/rollback and
+large-folder performance remain implementation work. Current folder scans
+rehash content and keep the scan set in memory; the earlier single-file and
+legacy-index benchmark figures do not establish folder-sync performance.
+Physical device, NAS, real LAN/WAN and long-duration gates remain unexecuted.
