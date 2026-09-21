@@ -127,6 +127,8 @@ and bidirectional TLS content with independent SHA-256. Paths contain literal
 foreign command while retaining the original source bytes and require refusal;
 stop/uninstall also check the manager and active worker PIDs. Windows query-error
 classification has a separate injected-boundary test, not an OS ACL test.
+On POSIX the stop case suspends its worker first and checks termination before
+resuming any survivor in failure cleanup.
 The native test removes its own
 registration in `finally`; failed fixtures and bounded diagnostic reports remain
 for inspection. CI explicitly prepares a user manager on disposable Linux

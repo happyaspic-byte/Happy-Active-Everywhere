@@ -55,17 +55,21 @@ fn call(config: &Config, action: &str) -> Result<Value> {
     let request = json!({"id":config.id,"executable":normal(&config.bootstrap)?,"arguments":arguments,"owner":owner});
     let request = file(config, "task", "json", &serde_json::to_vec(&request)?)?;
     let script = file(config, "task", "ps1", include_bytes!("../task.ps1"))?;
+    // Windows PowerShell 5 cannot authorize -File paths in Rust's extended
+    // \\?\ namespace. It accepts the same literal file in its normal form.
+    let script = normal(&script)?;
+    let request = normal(&request)?;
     let output = checked(
         "powershell.exe",
         &[
             "-NoProfile",
             "-NonInteractive",
             "-File",
-            script.to_str().unwrap(),
+            &script,
             "-Action",
             action,
             "-Config",
-            request.to_str().unwrap(),
+            &request,
         ],
     )?;
     Ok(serde_json::from_str(

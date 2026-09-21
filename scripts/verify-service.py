@@ -215,6 +215,7 @@ try:
     status = service('install', '--prefix', prefix, '--listen', f'127.0.0.1:{port}')
     assert status['healthy'] and status['native']['registered'] and status['native']['enabled'], status
     wait(lambda: sha(aroot / 'note') == first)
+    wait(lambda: any(j['id'] == 'active' and j.get('last_success') is not None for j in api('/api/status')['jobs']))
     assert api('/api/health')['device'] == aid
     initial_pid = api('/api/health')['pid']
     again = service('install', '--prefix', prefix, '--listen', f'127.0.0.1:{port}')
@@ -222,10 +223,22 @@ try:
     foreign_registration(status)
     foreign_runtime(status)
     processes = active_processes()
-    stopped = service('stop')
+    frozen = []
+    if os.name != 'nt':
+        import signal
+        frozen = [pid for pid in processes if pid != api('/api/health')['pid']]
+        for pid in frozen:
+            os.kill(pid, signal.SIGSTOP)
+    try:
+        stopped = service('stop')
+        # Check BEFORE resuming: a suspended orphan cannot consume parent EOF.
+        assert not any(process_alive(pid) for pid in processes), 'stop returned with surviving managed processes'
+    finally:
+        for pid in frozen:
+            if process_alive(pid):
+                os.kill(pid, signal.SIGCONT)
     assert not stopped['healthy'] and not stopped['runner_live'] and not stopped['native']['enabled'], stopped
     assert api('/api/health') is None
-    assert not any(process_alive(pid) for pid in processes), 'stop returned with surviving managed processes'
     second = payload(broot / 'note', 'changed while service stopped')
     assert sha(aroot / 'note') == first
     (package / 'VERSION').write_text('service-acceptance-update\n')
@@ -285,6 +298,10 @@ try:
     report = {'status': 'passed', 'platform': os.name, 'native_service': status['native']['backend'],
               'cases': ['install', 'idempotent-install', 'foreign-registration-refused', 'foreign-loaded-command-refused', 'literal-variable-paths', 'authenticated-health', 'tls-delivery', 'stop-and-child-exit', 'start', 'update', 'rollback', 'restart', 'manager-crash', 'uninstall-and-child-exit', 'idempotent-uninstall', 'preserved-paused-job', 'preserved-user-data'],
               'sha256': fourth, 'physical_reboot_verified': False, 'login_cycle_verified': False}
+    if os.name == 'nt':
+        report['cases'].remove('foreign-loaded-command-refused')
+    else:
+        report['cases'].append('stop-with-suspended-worker')
 except BaseException as error:
     failure = error
     report = {'status': 'failed', 'error': repr(error), 'fixture': str(base)}

@@ -194,7 +194,7 @@ fn runner_owns_manager_and_resumes_real_tls_jobs_after_version_switch() {
                     "127.0.0.1:0",
                 ])
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+                .stderr(fs::File::create(base.join("peer.stderr.log")).unwrap())
                 .spawn()
                 .unwrap(),
         );
@@ -219,17 +219,21 @@ fn runner_owns_manager_and_resumes_real_tls_jobs_after_version_switch() {
         )
         .unwrap();
         fs::write(b.root.join("note"), b"from real background peer").unwrap();
-        let start = || {
+        let start = |parent_watch: bool| {
+            let mut command = Command::new(&config.bootstrap);
+            command.args(["service", "run", "--state", s(&a.state)]);
+            if parent_watch {
+                command.arg("--parent-watch").stdin(Stdio::piped());
+            }
             Process(
-                Command::new(&config.bootstrap)
-                    .args(["service", "run", "--state", s(&a.state)])
+                command
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .spawn()
                     .unwrap(),
             )
         };
-        let runner = start();
+        let runner = start(false);
         wait(|| http(listen, &token, "/api/health").is_some());
         assert!(http(listen, "wrong", "/api/health").is_none());
         let health = http(listen, &token, "/api/health").unwrap();
@@ -241,6 +245,18 @@ fn runner_owns_manager_and_resumes_real_tls_jobs_after_version_switch() {
         wait(|| {
             fs::read(a.root.join("note"))
                 .is_ok_and(|bytes| digest(&bytes) == digest(b"from real background peer"))
+        });
+        // This restart case begins after a committed exchange. Merely seeing
+        // published bytes can precede the DB acknowledgement; killing there
+        // intentionally leaves edits concurrent (covered by the recovery tests).
+        wait(|| {
+            http(listen, &token, "/api/status").is_some_and(|status| {
+                status["jobs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|job| job["id"] == "active" && job["last_success"].is_u64())
+            })
         });
         let jobs = http(listen, &token, "/api/status").unwrap()["jobs"].clone();
         let worker_pid = jobs
@@ -266,9 +282,12 @@ fn runner_owns_manager_and_resumes_real_tls_jobs_after_version_switch() {
         wait(|| service::local_status(&a.state).is_ok_and(|s| s["runner_live"] == false));
         let selected = select(&prefix, "second");
         fs::write(a.root.join("note"), b"local edit while stopped").unwrap();
-        let runner = start();
+        let mut runner = start(true);
         wait(|| http(listen, &token, "/api/health").is_some());
         wait(|| {
+            if let Some(status) = http(listen, &token, "/api/status") {
+                fs::write(base.join("last-status.json"), status.to_string()).unwrap();
+            }
             fs::read(b.root.join("note"))
                 .is_ok_and(|bytes| digest(&bytes) == digest(b"local edit while stopped"))
         });
@@ -285,8 +304,20 @@ fn runner_owns_manager_and_resumes_real_tls_jobs_after_version_switch() {
                 .unwrap()["enabled"],
             false
         );
-        drop(runner);
+        // The Windows task wrapper owns this pipe. Closing it must terminate
+        // the bootstrap as well as the actual manager and worker subtree.
+        let worker_pid = http(listen, &token, "/api/status").unwrap()["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["id"] == "active")
+            .unwrap()["pid"]
+            .as_u64()
+            .unwrap();
+        drop(runner.0.stdin.take());
         wait(|| http(listen, &token, "/api/health").is_none());
+        wait(|| runner.0.try_wait().unwrap().is_some());
+        wait(|| !process_alive(worker_pid));
         assert!(a.state.join("identity.key.der").is_file());
         assert_eq!(
             digest(&fs::read(a.root.join("note")).unwrap()),

@@ -72,22 +72,23 @@ fn bus_json(args: &[&str]) -> Result<Value> {
     Ok(serde_json::from_str(&checked("busctl", &argv)?)?)
 }
 fn verify_command(config: &Config) -> Result<()> {
-    let object = bus_json(&[
-        "call",
-        "org.freedesktop.systemd1",
-        "/org/freedesktop/systemd1",
-        "org.freedesktop.systemd1.Manager",
-        "GetUnit",
-        "s",
-        &unit(config),
-    ])?;
-    let path = object["data"][0]
-        .as_str()
-        .context("invalid systemd unit object")?;
+    // Inactive units may be collected between separate bus calls. Property
+    // access loads this reversible unit object path in the same transaction.
+    let component: String = unit(config)
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                (b as char).to_string()
+            } else {
+                format!("_{b:02x}")
+            }
+        })
+        .collect();
+    let path = format!("/org/freedesktop/systemd1/unit/{component}");
     let command = bus_json(&[
         "get-property",
         "org.freedesktop.systemd1",
-        path,
+        &path,
         "org.freedesktop.systemd1.Service",
         "ExecStart",
     ])?;
