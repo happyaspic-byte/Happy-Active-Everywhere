@@ -397,11 +397,8 @@ fn folder_cli_persists_index_and_requires_delete_approval() {
     let repeated = ok(&["scan", "--db", s(&db), "--root", s(&root), "--device", "a"]);
     assert_eq!(repeated.trim(), "[]");
     fs::remove_file(root.join("one")).unwrap();
-    assert!(
-        !cli(&["scan", "--db", s(&db), "--root", s(&root), "--device", "a"])
-            .status
-            .success()
-    );
+    let pending = ok(&["scan", "--db", s(&db), "--root", s(&root), "--device", "a"]);
+    assert!(pending.contains("deletion-pending"));
     let deleted = ok(&[
         "scan",
         "--db",
@@ -511,7 +508,7 @@ fn watch_cli_detects_changes_and_keeps_running_after_missing_file() {
     assert!(created.contains("created"), "{created}");
     fs::remove_file(root.join("one")).unwrap();
     let error = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert!(error.contains("error"), "{error}");
+    assert!(error.contains("deletion-pending"), "{error}");
     fs::write(root.join("one"), b"changed").unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {

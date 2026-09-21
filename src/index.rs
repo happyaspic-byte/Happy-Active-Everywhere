@@ -15,6 +15,8 @@ pub enum Change {
     Created,
     Modified,
     Deleted,
+    DeletionPending,
+    DeletionCancelled,
 }
 #[derive(Debug, Serialize)]
 pub struct Event {
@@ -26,6 +28,7 @@ pub struct Entry {
     pub path: String,
     pub clock: Clock,
     pub hash: Option<String>,
+    pub pending_deletion: bool,
 }
 pub struct Index {
     connection: Connection,
@@ -63,7 +66,8 @@ impl Index {
         connection.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
             CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-            CREATE TABLE entries(path TEXT PRIMARY KEY,hash TEXT,clock TEXT NOT NULL);",
+            CREATE TABLE entries(path TEXT PRIMARY KEY,hash TEXT,clock TEXT NOT NULL);
+            CREATE TABLE pending_deletions(path TEXT PRIMARY KEY);",
         )?;
         let root_string = root.to_str().context("folder path must be UTF-8")?;
         for (k, v) in [
@@ -115,6 +119,10 @@ impl Index {
             marker,
         };
         result.check_root()?;
+        // Additive migration: existing alpha entries and clocks stay untouched.
+        result.connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS pending_deletions(path TEXT PRIMARY KEY);",
+        )?;
         Ok(result)
     }
     fn check_root(&self) -> Result<()> {
@@ -135,21 +143,23 @@ impl Index {
     pub fn entries(&self) -> Result<Vec<Entry>> {
         let mut statement = self
             .connection
-            .prepare("SELECT path,hash,clock FROM entries ORDER BY path")?;
+            .prepare("SELECT path,hash,clock,EXISTS(SELECT 1 FROM pending_deletions p WHERE p.path=entries.path) FROM entries ORDER BY path")?;
         let rows = statement.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, Option<String>>(1)?,
                 r.get::<_, String>(2)?,
+                r.get::<_, bool>(3)?,
             ))
         })?;
         let mut entries = Vec::new();
         for row in rows {
-            let (path, hash, clock) = row?;
+            let (path, hash, clock, pending_deletion) = row?;
             entries.push(Entry {
                 path,
                 hash,
                 clock: serde_json::from_str(&clock)?,
+                pending_deletion,
             });
         }
         Ok(entries)
@@ -168,14 +178,16 @@ impl Index {
             .values()
             .filter(|e| e.hash.is_some() && !found.contains_key(&e.path))
             .collect();
-        ensure!(
-            allow_deletes || deleted.is_empty(),
-            "missing files require explicit deletion approval; index unchanged"
-        );
         let transaction = self.connection.transaction()?;
         let mut events = Vec::new();
         for (path, hash) in found {
             let prior = old.get(&path);
+            if transaction.execute("DELETE FROM pending_deletions WHERE path=?1", [&path])? > 0 {
+                events.push(Event {
+                    path: path.clone(),
+                    change: Change::DeletionCancelled,
+                });
+            }
             if prior.and_then(|e| e.hash.as_deref()) == Some(hash.as_str()) {
                 continue;
             }
@@ -194,11 +206,24 @@ impl Index {
             });
         }
         for prior in deleted {
+            if !allow_deletes {
+                if transaction.execute(
+                    "INSERT OR IGNORE INTO pending_deletions VALUES(?1)",
+                    [&prior.path],
+                )? > 0 {
+                    events.push(Event {
+                        path: prior.path.clone(),
+                        change: Change::DeletionPending,
+                    });
+                }
+                continue;
+            }
             let clock = prior.clock.advance(&self.device)?;
             transaction.execute(
                 "UPDATE entries SET hash=NULL,clock=?2 WHERE path=?1",
                 params![prior.path, serde_json::to_string(&clock)?],
             )?;
+            transaction.execute("DELETE FROM pending_deletions WHERE path=?1", [&prior.path])?;
             events.push(Event {
                 path: prior.path.clone(),
                 change: Change::Deleted,

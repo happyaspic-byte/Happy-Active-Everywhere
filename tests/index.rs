@@ -23,10 +23,14 @@ fn scan_persists_edits_and_tombstones_without_wall_clock() {
         everywhere::versions::Relation::After
     );
     fs::remove_file(root.join("one")).unwrap();
-    assert!(index.scan(false).is_err());
+    assert_eq!(index.scan(false).unwrap()[0].change, Change::DeletionPending);
     assert!(index.entries().unwrap()[0].hash.is_some());
+    assert!(index.entries().unwrap()[0].pending_deletion);
+    assert!(index.scan(false).unwrap().is_empty());
     assert_eq!(index.scan(true).unwrap()[0].change, Change::Deleted);
     assert!(index.entries().unwrap()[0].hash.is_none());
+    assert!(!index.entries().unwrap()[0].pending_deletion);
+    assert!(index.scan(true).unwrap().is_empty());
 }
 #[test]
 fn missing_mount_marker_or_wrong_root_never_generates_deletions() {
@@ -85,11 +89,26 @@ fn pending_deletion_does_not_block_unrelated_creates_or_edits() {
     fs::write(root.join("edited"), b"after").unwrap();
     fs::write(root.join("created"), b"new").unwrap();
     let events = index.scan(false).unwrap();
-    assert!(events.iter().any(|e| e.path == "created" && e.change == Change::Created));
-    assert!(events.iter().any(|e| e.path == "edited" && e.change == Change::Modified));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.path == "created" && e.change == Change::Created)
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e.path == "edited" && e.change == Change::Modified)
+    );
     drop(index);
     let index = Index::open(&db, &root, "a").unwrap();
     let entries = index.entries().unwrap();
     assert_eq!(entries.len(), 3);
-    assert!(entries.iter().find(|e| e.path == "deleted").unwrap().hash.is_some());
+    assert!(
+        entries
+            .iter()
+            .find(|e| e.path == "deleted")
+            .unwrap()
+            .hash
+            .is_some()
+    );
 }
