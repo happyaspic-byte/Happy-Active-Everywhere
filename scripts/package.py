@@ -20,8 +20,20 @@ folder.mkdir(parents=True, exist_ok=False)
 shutil.copy2(binary, folder / name)
 shutil.copy2(root / 'README.md', folder / 'README.md')
 shutil.copytree(root / 'docs', folder / 'docs')
-if (root / 'folder-report').exists():
-    shutil.copytree(root / 'folder-report', folder / 'verification')
+reports = root / 'folder-report'
+if reports.exists():
+    assert reports.is_dir() and not reports.is_symlink(), 'Unsafe verification report directory'
+    verification = folder / 'verification'
+    verification.mkdir()
+    # Test evidence includes private keys, plaintext state and whole disk images.
+    # Distribute only these reviewed, top-level result summaries.
+    for report_name in ['delta.json', 'release.json', 'volume-ci.json', 'service-ci.json',
+                 'device-release-demo.json']:
+        report = reports / report_name
+        assert not report.is_symlink(), f'Unsafe verification report: {report_name}'
+        if report.exists():
+            assert report.is_file(), f'Invalid verification report: {report_name}'
+            shutil.copy2(report, verification / report_name)
 (folder / 'scripts').mkdir()
 for script in ['install.sh', 'install.ps1']:
     shutil.copy2(root / 'scripts' / script, folder / 'scripts' / script)

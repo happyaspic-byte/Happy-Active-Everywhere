@@ -55,6 +55,9 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python scripts/verify-install.py --binary target/debug/everywhere${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: Package content acceptance
+        if: ${{ !cancelled() }}
+        run: python scripts/verify-package.py
       - name: Prepare hosted Linux user service manager
         if: ${{ success() && runner.os == 'Linux' }}
         shell: bash

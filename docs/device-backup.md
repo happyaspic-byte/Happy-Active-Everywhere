@@ -33,6 +33,12 @@ snapshot, not an OS-wide freeze of external editors. Unsupported links/special
 files and paths remain rejected. Allow space for checkpoint copies plus the
 ciphertext; inspection also needs space for decrypted checkpoints.
 
+This captures indexed files and retained content objects. It does not clone
+ignored filesystem recovery directories, unrelated files, ACLs/xattrs or native
+service registrations. Keep an independent protected copy of source roots and
+their recovery journals until you have checked the migration; edits retained
+only in a displaced-file journal are outside this archive's indexed history.
+
 ## Restore and re-enroll
 
 ```sh
