@@ -7,6 +7,9 @@ from pathlib import Path
 import sqlite3
 import stat
 
+if not __debug__:
+    raise RuntimeError('Python optimization disables acceptance checks; remove -O and PYTHONOPTIMIZE')
+
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -66,9 +69,25 @@ def index_snapshot(state, folder='soak'):
         }
 
 
-def assert_reconciled(snapshots):
+def history_rows(state, after=0, folder='soak'):
+    path = Path(state) / 'shares' / folder / 'index.sqlite'
+    assert path.is_file() and not path.is_symlink(), 'missing or unsafe index'
+    with sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=1) as db:
+        return [(rowid, name, identity, json.loads(revision)) for rowid, name, identity, revision in
+                db.execute('SELECT rowid,path,id,revision FROM history WHERE rowid>? ORDER BY rowid',
+                           (after,))]
+
+
+def assert_reconciled(snapshots, expected_heads=None):
     assert snapshots
     expected = snapshots[0]['entries']
+    prescribed = expected_heads or {}
+    assert prescribed.keys() <= expected.keys(), 'expected revision path is missing'
+    for path, versions in expected.items():
+        if path in prescribed:
+            assert versions['heads'] == sorted(prescribed[path], key=lambda r: json.dumps(r, sort_keys=True)), path
+        else:
+            assert len(versions['heads']) == 1, f'unexpected unresolved conflict or empty head set: {path}'
     for snapshot in snapshots:
         assert snapshot['entries'] == expected, 'peer causal heads have not converged'
         assert not snapshot['pending'], 'unreviewed deletion remains'

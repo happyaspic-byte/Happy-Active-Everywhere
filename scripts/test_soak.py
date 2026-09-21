@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -12,12 +13,25 @@ import time
 from types import SimpleNamespace
 import unittest
 
-from soak_oracle import Observation, assert_manifest, manifest, index_snapshot, file_value
+from soak_oracle import (Observation, assert_manifest, assert_reconciled, manifest,
+                         index_snapshot, file_value)
 from soak_runtime import Node, Relay, RunLock, owner_is_live, process_alive
 from soak import Controller
 
 
 class OracleTests(unittest.TestCase):
+    def test_matching_visible_bytes_cannot_hide_equal_unresolved_conflicts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'note').write_bytes(b'expected visible bytes')
+            assert_manifest(root, {'note': file_value(b'expected visible bytes')})
+            snapshot = {'entries': {'note': {'heads': [
+                {'clock': {'a': 1}, 'content': {'kind': 'file', 'hash': 'a' * 64}},
+                {'clock': {'b': 1}, 'content': {'kind': 'deleted'}},
+            ]}}, 'pending': [], 'incoming': [], 'needed': []}
+            with self.assertRaises(AssertionError):
+                assert_reconciled([snapshot] * 3)
+
     def test_equal_corruption_extra_files_and_missing_files_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -74,6 +88,36 @@ class OracleTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_quiesce_refuses_new_connections_but_drains_an_existing_exchange(self):
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0)); listener.listen(1); listener.settimeout(5)
+        def echo():
+            with listener.accept()[0] as peer:
+                peer.settimeout(5)
+                while data := peer.recv(4096):
+                    peer.sendall(data)
+        worker = threading.Thread(target=echo)
+        worker.start()
+        relay = Relay(listener.getsockname())
+        try:
+            with socket.create_connection(relay.address, timeout=5) as client:
+                client.sendall(b'before')
+                self.assertEqual(client.recv(4096), b'before')
+                relay.quiesce()
+                with socket.create_connection(relay.address, timeout=5) as refused:
+                    self.assertEqual(refused.recv(1), b'')
+                client.sendall(b'finish the in-flight exchange')
+                self.assertEqual(client.recv(4096), b'finish the in-flight exchange')
+                client.shutdown(socket.SHUT_WR)
+                self.assertEqual(client.recv(1), b'')
+            deadline = time.monotonic() + 5
+            while relay.active_connections and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual(relay.active_connections, 0)
+        finally:
+            relay.close(); listener.close(); worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
+
     def test_relay_stops_during_half_closed_partition_reconnect_churn(self):
         listener = socket.socket()
         listener.bind(('127.0.0.1', 0)); listener.listen(100); listener.settimeout(.1)
@@ -199,6 +243,50 @@ class ControllerTests(unittest.TestCase):
         return Controller(SimpleNamespace(work_dir=root, binary=binary or self.binary,
             seconds=1, min_cycles=1, cycle_interval=0, max_bytes=4 * 1024**3,
             reserve_bytes=0))
+
+    def test_optimization_flags_are_rejected_before_workspace_creation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for flag, environment in [(['-O'], {}), ([], {'PYTHONOPTIMIZE': '1'})]:
+                root = Path(temporary) / ('flag' if flag else 'environment')
+                result = subprocess.run([sys.executable, *flag, self.runner, 'run',
+                    '--binary', Path(temporary) / 'missing-binary', '--work-dir', root],
+                    env={**os.environ, **environment}, capture_output=True, text=True, timeout=15)
+                with self.subTest(flag=flag):
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('optimization', result.stderr.lower())
+                    self.assertFalse(root.exists(), 'optimized run created a workspace')
+
+    def test_retained_blobs_do_not_hide_lost_or_replaced_history(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            controller = self.controller(Path(temporary) / 'run')
+            node = Node(self.binary, controller.root, 'a')
+            controller.nodes = [node]; controller.down.remove('a')
+            try:
+                node.start()
+                for payload in [b'prior revision', b'latest visible revision']:
+                    (node.root / 'note').write_bytes(payload)
+                    node.api({'action': 'scan', 'folder': 'soak'})
+                    controller.expected = {'note': file_value(payload)}
+                    controller.converge()
+                controller.verify_retained()
+                path = node.state / 'shares/soak/index.sqlite'
+                with sqlite3.connect(path) as database:
+                    saved = database.execute('SELECT path,id,revision FROM history').fetchall()
+                    database.execute('DELETE FROM history')
+                self.assertEqual(node.api({'action': 'history', 'folder': 'soak', 'path': 'note'}), [])
+                with self.subTest(fault='deleted'):
+                    with self.assertRaises(AssertionError):
+                        controller.verify_retained()
+                with sqlite3.connect(path) as database:
+                    database.executemany('INSERT INTO history VALUES(?,?,?)', saved)
+                    first = json.loads(saved[0][2]); first['clock']['invented'] = 123
+                    database.execute('UPDATE history SET revision=? WHERE path=? AND id=?',
+                                     (json.dumps(first), saved[0][0], saved[0][1]))
+                with self.subTest(fault='same-count-replacement'):
+                    with self.assertRaises(AssertionError):
+                        controller.verify_retained()
+            finally:
+                node.stop(); controller.event_stream.close(); controller.lock.close()
 
     def test_normal_overwritten_revisions_enter_independent_retention_oracle(self):
         with tempfile.TemporaryDirectory() as temporary:

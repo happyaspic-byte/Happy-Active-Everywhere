@@ -15,7 +15,7 @@ import time
 import uuid
 
 from soak_oracle import (Observation, assert_manifest, assert_reconciled, file_value,
-                         index_snapshot, manifest, sha256)
+                         history_rows, index_snapshot, manifest, sha256)
 from soak_runtime import (CliError, Node, Relay, RunLock, atomic_json,
                           owner_is_live, process_alive, rss_bytes)
 
@@ -43,6 +43,9 @@ class Controller:
         self.job_pids = {}
         self.job_wait = {}
         self.retained = {name: {} for name in 'abc'}
+        self.revisions = {name: {} for name in 'abc'}
+        self.known_revisions = {name: set() for name in 'abc'}
+        self.history_cursor = {name: 0 for name in 'abc'}
         self.metrics = {'max_sampled_rss_bytes': None, 'rss_samples': 0, 'workspace_bytes': 0,
                         'max_unchanged_tls_bytes': 0, 'expected_restarts': 0}
         self.last_rss = 0
@@ -76,6 +79,7 @@ class Controller:
             'cleanup_errors': self.cleanup_errors,
             'all_owned_processes_stopped': self.all_owned_processes_stopped,
             'retained_objects': {name: len(values) for name, values in self.retained.items()},
+            'retained_revisions': {name: len(values) for name, values in self.revisions.items()},
             'qualification_72h': (self.status == 'passed' and self.args.seconds >= 259200
                                   and self.observation.elapsed >= 259200),
             'qualification_7d': (self.status == 'passed' and self.args.seconds >= 604800
@@ -195,6 +199,11 @@ class Controller:
             self.expected[path] = file_value(data)
 
     def pause(self, nodes=None):
+        if nodes is None:
+            for relay in self.relays:
+                relay.quiesce()
+            self.wait(lambda: not any(relay.active_connections for relay in self.relays),
+                      'in-flight exchanges did not finish before checkpoint')
         for node in self.nodes if nodes is None else nodes:
             node.pause()
             self.job_pids = {key: pid for key, pid in self.job_pids.items() if key[0] != node.name}
@@ -202,6 +211,9 @@ class Controller:
         self.pulse(force=True)
 
     def resume(self, nodes=None):
+        if nodes is None:
+            for relay in self.relays:
+                relay.resume()
         values = self.nodes if nodes is None else nodes
         for node in values if self.cycles % 2 == 0 else list(reversed(values)):
             node.resume()
@@ -222,22 +234,38 @@ class Controller:
             for node in values:
                 assert_manifest(node.root, expected)
             snapshots = self.snapshots(values)
-            assert_reconciled(snapshots)
-            for path, revisions in (heads or {}).items():
-                actual = snapshots[0]['entries'][path]['heads']
-                assert actual == sorted(revisions, key=lambda r: json.dumps(r, sort_keys=True)), path
+            assert_reconciled(snapshots, expected_heads=heads)
             return expected, snapshots
         self.expected, snapshots = self.wait(check, 'peer state did not converge')
         # Capture known normal contents before the next overwrite/deletion.
         # A missing history object at final verification must fail even if all
         # peers have the correct latest visible file.
         for node, snapshot in zip(values, snapshots):
+            self.capture_history(node, snapshot)
             for path, versions in snapshot['entries'].items():
                 revisions = versions['heads']
                 if len(revisions) == 1 and revisions[0]['content']['kind'] == 'file':
                     digest = revisions[0]['content']['hash']
                     self.remember(node, node.state / 'shares' / FOLDER / 'objects' / digest,
                                   self.expected[path]['sha256'])
+
+    def capture_history(self, node, snapshot):
+        known = self.revisions[node.name]
+        # Read new rows only during the loop. At final verification, reread the
+        # complete public history API to detect deletion/replacement of old rows.
+        for rowid, path, identity, revision in history_rows(node.state, self.history_cursor[node.name]):
+            key = (path, identity)
+            assert key not in known or known[key] == revision, 'revision identity changed metadata'
+            if key not in known:
+                known[key] = revision
+                self.known_revisions[node.name].add((path, json.dumps(revision, sort_keys=True)))
+                self.event('retained-revision', node=node.name, path=path, revision_id=identity,
+                           revision=revision)
+            self.history_cursor[node.name] = rowid
+        for path, versions in snapshot['entries'].items():
+            for head in versions['heads']:
+                assert (path, json.dumps(head, sort_keys=True)) in self.known_revisions[node.name], \
+                    f'current revision missing from history: {node.name}/{path}'
 
     def checkpoint(self, phase):
         self.phase = phase
@@ -415,6 +443,24 @@ class Controller:
         for name, digest in self.harness_hashes.items():
             assert sha256(self.root / 'harness' / name) == digest, 'snapshotted harness changed'
 
+    def verify_retained(self):
+        assert_reconciled(self.snapshots())
+        for node in self.nodes:
+            assert_manifest(node.root, self.expected)
+            expected = self.revisions[node.name]
+            actual = {}
+            for path in sorted({path for path, _ in expected}):
+                rows = node.api({'action': 'history', 'folder': FOLDER, 'path': path})
+                for row in rows:
+                    key = (path, row['id'])
+                    assert key not in actual, 'duplicate history identity'
+                    actual[key] = {'clock': row['clock'], 'content': row['content']}
+                self.pulse()
+            assert actual == expected, f'historical revisions lost or changed: {node.name}'
+            for object_name, digest in self.retained[node.name].items():
+                self.remember(node, node.state / 'shares' / FOLDER / 'objects' / object_name, digest)
+                self.pulse()
+
     def run(self):
         failure = None
         try:
@@ -430,12 +476,7 @@ class Controller:
                     time.sleep(.5)
             self.phase = 'final-verification'
             self.verify_provenance()
-            self.pause(); assert_reconciled(self.snapshots())
-            for node in self.nodes:
-                assert_manifest(node.root, self.expected)
-                for object_name, digest in self.retained[node.name].items():
-                    self.remember(node, node.state / 'shares' / FOLDER / 'objects' / object_name, digest)
-                    self.pulse()
+            self.pause(); self.verify_retained()
             self.pulse(force=True)
             assert self.observation.complete(time.monotonic(), self.cycles)
             self.status = 'verified-awaiting-cleanup'

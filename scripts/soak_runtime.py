@@ -135,6 +135,15 @@ class Relay:
     def address_text(self):
         return f'{self.address[0]}:{self.address[1]}'
 
+    @property
+    def active_connections(self):
+        with self.guard:
+            return len(self.workers)
+
+    def quiesce(self):
+        with self.guard:
+            self.enabled = False
+
     def _accept(self):
         while not self.stopping:
             try:

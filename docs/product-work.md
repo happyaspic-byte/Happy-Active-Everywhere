@@ -366,3 +366,31 @@ a short same-host debug-binary run; they do not establish a 72-hour qualificatio
 Three-OS managed smoke Actions and a fresh independent review are required before
 starting the real 72-hour run. Actual elapsed qualification, NAS/physical devices,
 LAN/WAN, reboot/power loss and the deferred 100 GiB gate remain open.
+
+The independent review found three Important false-pass paths in the controller:
+equal unresolved conflicts outside prescribed scenarios, optimized Python removing
+assertions, and lost/replaced history records while blobs remained intact. Each
+was reproduced before correction. Normal/final reconciliation now requires one
+head per path; only exact prescribed conflict revisions are exempt. Optimized
+execution is rejected before fixture creation. Observed revision IDs/metadata
+are remembered and rechecked through the complete history API at final acceptance.
+All 17 Python checks passed after correction, including both optimization entry
+paths and same-count history replacement. No Critical or Minor findings remained
+from that review. Windows parent-ACL confidentiality and external qualification
+remain outside the locally verified boundary.
+
+The strengthened full smoke then caught a checkpoint race: forcibly stopping
+continuous jobs could leave an already materialized revision in the incoming
+queue. The retained failure had matching single heads and no needed blocks; the
+queue was not ignored or cleared by the harness. Checkpoints now refuse new relay
+connections, await completion of existing exchanges, then stop the jobs. A real
+socket regression checks refusal of new connections while the existing exchange
+can finish. Deliberate partition/crash scenarios still interrupt connections.
+
+Final local acceptance of the complete fix pass: all 18 Python tests passed; a
+fresh two-cycle smoke passed after 64.60 observed seconds, rechecked 23 content
+objects and 33 exact history revisions per device, and stopped every owned
+process without cleanup errors. Its unchanged interval used at most 12,694 TLS
+bytes. Qualification flags remained false. The Rust source is unchanged from
+the 93-test, format and Clippy run recorded above; current-head Actions will
+rerun that full regression alongside the new managed smoke on every OS.
