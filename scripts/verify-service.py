@@ -314,6 +314,13 @@ except BaseException as error:
             result = subprocess.run(['systemctl', '--user', 'show', identifier + '.service',
                 '--property=LoadState,ExecStartEx,FragmentPath,DropInPaths'], capture_output=True, text=True, timeout=25)
             commands.append({'native_failure': result.stdout, 'stderr': result.stderr})
+    if os.name == 'nt' and (state / 'service/config.json').is_file():
+        identifier = json.loads((state / 'service/config.json').read_text())['id']
+        if re.fullmatch(r'happy-everywhere-[a-f0-9]{32}', identifier):
+            result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                f"Get-ScheduledTask -TaskName '{identifier}' -TaskPath '\\' -ErrorAction Stop | Select-Object TaskName,State,Principal | ConvertTo-Json -Depth 5"],
+                capture_output=True, text=True, timeout=25)
+            commands.append({'native_failure': result.stdout, 'stderr': result.stderr})
 finally:
     if installed:
         result = subprocess.run([str(binary), 'service', 'uninstall', '--state', str(state)], capture_output=True, text=True, timeout=60)

@@ -44,12 +44,22 @@ function Find-Task {
 $existing = Find-Task
 if ($existing) {
   $actions = @($existing.Actions)
-  if ($existing.Description -cne $settings.owner -or $actions.Count -ne 1 -or
-      $actions[0].Execute -cne $nativeExe -or $actions[0].Arguments -cne $nativeArgs -or
-      $existing.Principal.UserId -cne $userSid -or $existing.Principal.RunLevel.ToString() -ne 'Limited' -or
-      $existing.Principal.LogonType.ToString() -ne 'Interactive') {
-    throw 'Scheduled task belongs to another deployment or was changed; preserving it'
+  # Scheduler may return an account name even when registration used its SID.
+  $principalId=$existing.Principal.UserId
+  if ($principalId -match '^S-\d-') {
+    $principalSid=(New-Object Security.Principal.SecurityIdentifier($principalId)).Value
+  } else {
+    $account=New-Object Security.Principal.NTAccount($principalId)
+    $principalSid=$account.Translate([Security.Principal.SecurityIdentifier]).Value
   }
+  $mismatch=@()
+  if ($existing.Description -cne $settings.owner) { $mismatch+='owner marker' }
+  if ($actions.Count -ne 1) { $mismatch+='action count' }
+  elseif ($actions[0].Execute -cne $nativeExe -or $actions[0].Arguments -cne $nativeArgs) { $mismatch+='executable or arguments' }
+  if ($principalSid -cne $userSid) { $mismatch+='user SID' }
+  if ($existing.Principal.RunLevel.ToString() -ne 'Limited') { $mismatch+='run level' }
+  if ($existing.Principal.LogonType.ToString() -ne 'Interactive') { $mismatch+='logon type' }
+  if ($mismatch.Count) { throw ('Scheduled task ownership mismatch ('+($mismatch -join ', ')+'); preserving it') }
 }
 if ($Action -eq 'install' -and !$existing) {
   $nativeAction = New-ScheduledTaskAction -Execute $nativeExe -Argument $nativeArgs
