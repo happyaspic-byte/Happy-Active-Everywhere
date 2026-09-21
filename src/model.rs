@@ -91,7 +91,10 @@ impl Versions {
             .collect();
         ensure!(heads.len() <= 128, "too many concurrent versions");
         let result = Self { heads };
-        ensure!(serde_json::to_vec(&result)?.len() <= 64 * 1024, "version metadata exceeds the per-path limit");
+        ensure!(
+            serde_json::to_vec(&result)?.len() <= 64 * 1024,
+            "version metadata exceeds the per-path limit"
+        );
         Ok(result)
     }
 

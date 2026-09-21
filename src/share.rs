@@ -90,7 +90,9 @@ fn read_config(directory: &Path) -> Result<Config> {
         "unsafe share configuration"
     );
     let mut bytes = Vec::new();
-    File::open(path)?.take(128 * 1024 + 1).read_to_end(&mut bytes)?;
+    File::open(path)?
+        .take(128 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= 128 * 1024, "share configuration too large");
     let config: Config = serde_json::from_slice(&bytes)?;
     valid_id(&config.id)?;
@@ -789,4 +791,32 @@ impl Share {
         }
         Ok(serde_json::Value::Array(conflicts))
     }
+}
+
+/// Bounded summaries can be read while a synchronization holds the writer lock.
+pub fn catalog(state: &Path) -> Result<serde_json::Value> {
+    let mut folders = Vec::new();
+    let shares = state.join("shares");
+    if shares.try_exists()? {
+        for entry in fs::read_dir(shares)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() { continue; }
+            ensure!(folders.len() < 1024, "too many registered folders");
+            let summary = (|| -> Result<serde_json::Value> {
+                let config = read_config(&entry.path())?;
+                let db = Connection::open_with_flags(entry.path().join("index.sqlite"), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+                let files: i64 = db.query_row("SELECT count(*) FROM entries WHERE json_extract(materialized,'$.kind')='file'", [], |r| r.get(0))?;
+                let pending: i64 = db.query_row("SELECT count(*) FROM pending", [], |r| r.get(0))?;
+                let conflicts: i64 = db.query_row("SELECT count(*) FROM entries WHERE json_array_length(versions,'$.heads')>1", [], |r| r.get(0))?;
+                let sequence: String = db.query_row("SELECT value FROM meta WHERE key='seq'", [], |r| r.get(0))?;
+                Ok(serde_json::json!({"folder":config.id,"root":config.root,"mode":config.mode,"peers":config.peers,"files":files,"pending_deletions":pending,"concurrent_paths":conflicts,"sequence":sequence}))
+            })();
+            folders.push(match summary {
+                Ok(value) => value,
+                Err(error) => serde_json::json!({"folder":entry.file_name().to_string_lossy(),"error":format!("{error:#}")}),
+            });
+        }
+    }
+    folders.sort_by_key(|f| f["folder"].as_str().unwrap_or_default().to_owned());
+    Ok(serde_json::json!({"identity":identity::fingerprint(&fs::read(state.join("identity.der"))?),"version":env!("CARGO_PKG_VERSION"),"folders":folders}))
 }

@@ -21,6 +21,18 @@ struct ShareArgs {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Serve the private, local management dashboard.
+    Manage {
+        #[arg(long)]
+        state: PathBuf,
+        #[arg(long, default_value = "127.0.0.1:7445")]
+        listen: SocketAddr,
+    },
+    /// Explicitly display the local management login credential.
+    ManagementToken {
+        #[arg(long)]
+        state: PathBuf,
+    },
     /// Register a folder and create its independent synchronization index.
     ShareInit {
         #[command(flatten)]
@@ -199,6 +211,8 @@ enum Command {
 #[tokio::main(worker_threads = 2)]
 async fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::Manage { state, listen } => everywhere::management::serve(&state, listen).await?,
+        Command::ManagementToken { state } => println!("{}", everywhere::management::token(&state)?),
         Command::ShareInit { share, root, mode } => {
             everywhere::share::Share::create(&share.state, &share.folder, &root, mode)?;
             println!("initialized");

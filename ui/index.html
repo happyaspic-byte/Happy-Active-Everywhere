@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Happy Active Everywhere</title><link rel="stylesheet" href="/app.css"><script src="/app.js" defer></script></head>
+<body>
+<aside><a class="brand" href="/" aria-label="홈"><span class="mark">H</span><span>Happy<br><small>ACTIVE EVERYWHERE</small></span></a><p class="nav-label">내 장비</p><a class="nav active" href="#folders">동기화 폴더 <span>↗</span></a><a class="nav" href="#add-folder">폴더 등록 <span>＋</span></a><div class="aside-note"><span class="dot"></span> 로컬 관리 화면<p>이 컴퓨터의 폴더와<br>승인된 장비를 관리합니다.</p><small>개발 중 · Alpha</small></div></aside>
+<main>
+<header><div><p class="eyebrow">YOUR FILES, YOUR DEVICES</p><h1>어디서든, 내 파일.</h1><p class="muted">변경 내용은 연결하고, 이전 내용은 보존합니다.</p></div><button id="lock" class="quiet" hidden>화면 잠금</button></header>
+<section id="login" class="card login"><span class="overline">PRIVATE WORKSPACE</span><h2>내 장비에 연결</h2><p>터미널에서 <code>everywhere management-token --state STATE</code>로 확인한 관리 토큰을 입력하세요.</p><form id="login-form"><label for="token">관리 토큰</label><div class="inline"><input id="token" type="password" autocomplete="off" spellcheck="false" required placeholder="64자리 관리 토큰"><button type="submit">연결하기 →</button></div></form><small>토큰은 이 탭의 메모리에만 보관됩니다.</small></section>
+<div id="workspace" hidden>
+<section class="device"><div><span class="dot"></span><strong>이 컴퓨터</strong><span id="version" class="pill"></span></div><code id="identity"></code><small>다른 장비에서 이 지문을 확인한 뒤 연결을 승인하세요.</small></section>
+<section id="folders"><div class="section-heading"><div><p class="eyebrow">WORKSPACE</p><h2>동기화 폴더</h2></div><button id="refresh" class="quiet">새로고침 ↻</button></div><div id="folder-list"></div></section>
+<section id="add-folder" class="card"><div class="section-heading"><div><p class="eyebrow">NEW FOLDER</p><h2>폴더 등록</h2></div><span class="pill">기존 파일 유지</span></div><p class="muted">두 장비에서 같은 폴더 ID를 사용하세요. 경로는 장비마다 달라도 됩니다.</p><form id="folder-form" class="form-grid"><label>폴더 ID<input name="folder" required maxlength="64" pattern="[A-Za-z0-9_-]+" placeholder="personal"></label><label>이 컴퓨터의 전체 경로<input name="root" required placeholder="/Users/me/Personal"></label><label>동기화 방향<select name="mode"><option value="bidirectional">양방향</option><option value="send-only">보내기 전용</option><option value="receive-only">받기 전용</option></select></label><button type="submit">폴더 등록 ＋</button></form><small>폴더는 미리 만들어 주세요. 상태 저장소와 겹치는 경로는 등록할 수 없습니다.</small></section>
+<section id="details" class="card" hidden><div class="section-heading"><h2 id="detail-title"></h2><button id="close-details" class="quiet">닫기 ×</button></div><div id="detail-content"></div></section>
+</div>
+<div id="message" role="status" aria-live="polite" hidden></div>
+<footer>Happy Active Everywhere <span>파일 내용 · 충돌 보존 · 명시적 삭제 승인</span></footer>
+</main></body></html>

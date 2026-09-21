@@ -10,3 +10,5 @@ pub mod index;
 mod root;
 pub mod share;
 pub mod sync;
+
+pub mod management;

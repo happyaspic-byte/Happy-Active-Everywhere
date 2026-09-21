@@ -426,3 +426,19 @@ fn malformed_epoch_reports_error_instead_of_panicking() {
     assert!(!result.status.success());
     assert!(!String::from_utf8_lossy(&result.stderr).contains("panicked"));
 }
+
+#[test]
+fn revocation_after_metadata_staging_prevents_filesystem_application() {
+    use everywhere::{model::{Content, Versions}, share::{Record, Share}};
+    let tmp = TempDir::new().unwrap();
+    let (a, b) = pair(tmp.path());
+    let share = Share::open(&a.state, "personal").unwrap();
+    share.begin_incoming().unwrap();
+    share.stage(&b.id, &[Record { path: "remote-directory".into(), versions: Versions::default().edit(&b.id, Content::Directory).unwrap(), seq: 1 }]).unwrap();
+    identity::revoke(&a.state, &b.id).unwrap();
+    assert!(share.commit_incoming(&b.id).is_err());
+    assert!(!a.root.join("remote-directory").exists());
+    drop(share);
+    // Removing the folder grant must remain possible after global revocation.
+    a.command("share-peer", &["--peer", &b.id, "--remove"]);
+}
