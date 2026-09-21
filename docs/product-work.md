@@ -207,6 +207,13 @@ limit; the six publication-boundary fixtures are deterministic restart tests,
 not physical power-loss evidence. Windows database flushes use writable handles;
 the exact new head still requires all three hosted OS jobs before qualification.
 
+Initial checkpoint commit `2b28eb1` passed 77 Rust tests on Ubuntu/macOS and
+68 on Windows, including all applicable recovery cases. Windows Clippy rejected
+a mutable directory builder used only by the Unix permission branch. The
+follow-up makes mutability platform-specific without changing directory creation.
+The initial workflow is not an all-green checkpoint; the corrected head must
+complete the full matrix before use as a package candidate.
+
 Design decisions: the checkpoint covers indexed folder state and retained
 objects; original credentials/current configuration are required. It preserves
 current authority, including send-only policy, rather than restoring old grants.
