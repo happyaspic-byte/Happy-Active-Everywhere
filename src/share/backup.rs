@@ -251,7 +251,7 @@ pub(crate) fn verify(path: &Path) -> Result<Config> {
 }
 
 pub(crate) fn capture(share: &Share, output: &Path) -> Result<u64> {
-    private_dir(&output).context("checkpoint destination must be new")?;
+    private_dir(output).context("checkpoint destination must be new")?;
     private_dir(&output.join("objects"))?;
     let database = output.join("index.sqlite");
     snapshot(&share.connection, &database)?;

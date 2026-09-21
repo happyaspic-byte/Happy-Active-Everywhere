@@ -263,3 +263,29 @@ measurement used 128 MiB plus 1,000 files: 135,077,084 initial client TLS bytes,
 SHA-256 mismatches. `084886f` also passed all 17 Windows native behavior cases,
 then failed fixture cleanup on an open log handle; that harness issue is corrected.
 The corrected head's final all-OS workflow remains the qualification gate.
+
+## Encrypted device recovery — 2026-09-22
+
+Starting from all-green service milestone `bda67ab` / run `35653299417`, device
+capture now encrypts identity, folder checkpoints, history and reviewed settings
+with age X25519. Recovery creates a new workspace and identity by default, fresh
+folder epochs, empty active grants/trust, disabled jobs and receive-only modes.
+It requires full reconciliation before restoring prior modes unless the operator
+explicitly accepts offline authority. Replacement of an old identity requires
+its matching fingerprint and retirement assertion.
+
+Local process tests verify SHA-256 content/history preservation, pending deletes,
+new and replacement identities, key/ciphertext errors, busy/unavailable roots,
+real TLS reconciliation of newer remote deletions and subsequent edits in both
+directions. Forced termination before backup/recovery publication permits retry
+without changing source data. Authenticated malicious paths, duplicate entries,
+trailing plaintext and unsupported SQLite schemas are rejected. A regression
+caught credentials being publishable inside a source share; overlapping recovery
+workspaces are now refused. macOS path spelling in a test was corrected to use
+canonical paths, and Clippy's needless-borrow finding was removed.
+
+Independent review and exact-head three-OS delivery are still pending for this
+milestone. Hosted APFS acceptance now includes actual ENOSPC during device backup
+and recovery; this new acceptance has not yet run. No local DiskImages commands
+were used. Full-product physical device/NAS/WAN, reboot/power-loss and soak gates
+remain open; the 100 GiB test is still deferred.

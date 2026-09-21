@@ -171,3 +171,150 @@ pub(super) fn decode(
     header.summary(staging.path())?;
     Ok((staging, header))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> (tempfile::TempDir, Header, age::x25519::Identity) {
+        let base = tempfile::tempdir().unwrap();
+        let state = base.path().join("source");
+        identity::init(&state).unwrap();
+        let header = Header {
+            format: 1,
+            certificate: fs::read(state.join("identity.der")).unwrap(),
+            private_key: fs::read(state.join("identity.key.der")).unwrap(),
+            peers: BTreeMap::new(),
+            jobs: BTreeMap::new(),
+            folders: BTreeSet::new(),
+        };
+        let key = age::x25519::Identity::generate();
+        write_private(
+            &base.path().join("key"),
+            key.to_string().expose_secret().as_bytes(),
+        )
+        .unwrap();
+        (base, header, key)
+    }
+    fn plaintext(header: &Header) -> Vec<u8> {
+        let json = serde_json::to_vec(header).unwrap();
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend_from_slice(&(json.len() as u32).to_be_bytes());
+        bytes.extend(json);
+        bytes
+    }
+    fn record(bytes: &mut Vec<u8>, name: &str, data: &[u8]) {
+        bytes.extend_from_slice(&(name.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.extend_from_slice(&(data.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(data);
+    }
+    fn ciphertext(base: &Path, key: &age::x25519::Identity, bytes: &[u8]) -> PathBuf {
+        let path = base.join(crate::root::random_id().unwrap());
+        let recipient = key.to_public();
+        let encryptor =
+            age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))
+                .unwrap();
+        let mut writer = encryptor.wrap_output(private_file(&path).unwrap()).unwrap();
+        writer.write_all(bytes).unwrap();
+        writer.finish().unwrap();
+        path
+    }
+    #[test]
+    fn authenticated_archives_reject_paths_duplicates_and_trailing_plaintext() {
+        let (base, mut header, key) = fixture();
+        header.folders.insert("personal".into());
+        for name in [
+            "../escape",
+            "folders/personal/../../escape",
+            "folders/personal/objects/not-a-hash",
+            "folders/unknown/index.sqlite",
+            "folders/personal/config.json",
+        ] {
+            let mut bytes = plaintext(&header);
+            record(&mut bytes, name, b"payload");
+            bytes.extend(0u32.to_be_bytes());
+            let path = ciphertext(base.path(), &key, &bytes);
+            assert!(
+                decode(&path, &base.path().join("key"), Some(base.path())).is_err(),
+                "accepted {name}"
+            );
+        }
+        let mut bytes = plaintext(&header);
+        record(&mut bytes, "folders/personal/manifest.json", b"{}");
+        record(&mut bytes, "folders/personal/manifest.json", b"{}");
+        bytes.extend(0u32.to_be_bytes());
+        let path = ciphertext(base.path(), &key, &bytes);
+        assert!(
+            decode(&path, &base.path().join("key"), Some(base.path()))
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("duplicate")
+        );
+        header.folders.clear();
+        let mut bytes = plaintext(&header);
+        bytes.extend(0u32.to_be_bytes());
+        bytes.push(1);
+        let path = ciphertext(base.path(), &key, &bytes);
+        assert!(
+            decode(&path, &base.path().join("key"), Some(base.path()))
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("trailing")
+        );
+        assert!(!base.path().join("escape").exists());
+    }
+    #[test]
+    fn authenticated_archive_still_validates_sqlite_schema() {
+        let (base, mut header, key) = fixture();
+        header.folders.insert("personal".into());
+        let db = base.path().join("malicious.sqlite");
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection
+            .execute_batch("CREATE TABLE unexpected(secret TEXT)")
+            .unwrap();
+        drop(connection);
+        let config = share::Config {
+            id: "personal".into(),
+            root: PathBuf::from("/untrusted/source"),
+            identity: identity::fingerprint(&header.certificate),
+            epoch: "a".repeat(64),
+            marker: "b".repeat(64),
+            mode: crate::versions::Mode::Bidirectional,
+            peers: BTreeSet::new(),
+        };
+        let manifest = json!({"format":1,"config":config,"database_hash":crate::storage::Manifest::from_path(&db).unwrap().hash,"objects":0});
+        let mut bytes = plaintext(&header);
+        record(
+            &mut bytes,
+            "folders/personal/manifest.json",
+            &serde_json::to_vec(&manifest).unwrap(),
+        );
+        record(
+            &mut bytes,
+            "folders/personal/index.sqlite",
+            &fs::read(db).unwrap(),
+        );
+        bytes.extend(0u32.to_be_bytes());
+        let path = ciphertext(base.path(), &key, &bytes);
+        assert!(decode(&path, &base.path().join("key"), Some(base.path())).is_err());
+    }
+    #[test]
+    fn publication_never_replaces_a_competing_file_or_directory() {
+        let base = tempfile::tempdir().unwrap();
+        let source = base.path().join("source");
+        private_dir(&source).unwrap();
+        write_private(&source.join("payload"), b"restored").unwrap();
+        let target = base.path().join("target");
+        write_private(&target, b"other user's file").unwrap();
+        assert!(publish_directory(&source, &target).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"other user's file");
+        fs::remove_file(&target).unwrap();
+        private_dir(&target).unwrap();
+        assert!(publish_directory(&source, &target).is_err());
+        assert!(source.join("payload").is_file());
+        assert!(fs::read_dir(target).unwrap().next().is_none());
+    }
+}

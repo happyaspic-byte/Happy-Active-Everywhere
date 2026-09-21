@@ -226,6 +226,104 @@ fn sha(path: &Path) -> String {
 }
 
 #[test]
+fn interrupted_device_operations_publish_nothing_and_retry_safely() {
+    use std::{
+        io::Write,
+        process::Stdio,
+        thread,
+        time::{Duration, Instant},
+    };
+    let base = tempfile::tempdir().unwrap();
+    let state = base.path().join("state");
+    let root = base.path().join("files");
+    fs::create_dir(&root).unwrap();
+    ok(&["init", "--state", s(&state)]);
+    ok(&[
+        "share-init",
+        "--state",
+        s(&state),
+        "--folder",
+        "personal",
+        "--root",
+        s(&root),
+    ]);
+    let payload = root.join("large.bin");
+    let mut file = fs::File::create(&payload).unwrap();
+    for _ in 0..32 {
+        file.write_all(&vec![173u8; 1024 * 1024]).unwrap();
+    }
+    file.sync_all().unwrap();
+    drop(file);
+    let original = sha(&payload);
+    let key = base.path().join("key");
+    let recipient = json(&["device-keygen", "--output", s(&key)])["recipient"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let backup = base.path().join("backup.age");
+    let workspace = base.path().join("recovered");
+    let backup_args = [
+        "device-backup",
+        "--state",
+        s(&state),
+        "--recipient",
+        &recipient,
+        "--output",
+        s(&backup),
+    ];
+    let restore_args = [
+        "device-recover",
+        "--backup",
+        s(&backup),
+        "--key",
+        s(&key),
+        "--output",
+        s(&workspace),
+    ];
+    for (args, prefix, output) in [
+        (&backup_args[..], ".everywhere-backup-", &backup),
+        (&restore_args[..], ".everywhere-restore-", &workspace),
+    ] {
+        let log = base.path().join("interrupted.stderr");
+        let mut child = Command::new(env!("CARGO_BIN_EXE_everywhere"))
+            .args(args)
+            .stdout(Stdio::null())
+            .stderr(fs::File::create(&log).unwrap())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if fs::read_dir(base.path()).unwrap().any(|entry| {
+                entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(prefix)
+            }) {
+                break;
+            }
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "operation exited before interruption: {}",
+                fs::read_to_string(&log).unwrap()
+            );
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("staging did not appear");
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(!output.exists(), "interrupted operation published output");
+        assert_eq!(sha(&payload), original);
+        ok(args);
+    }
+    assert_eq!(sha(&workspace.join("folders/personal/large.bin")), original);
+}
+
+#[test]
 fn encrypted_capture_authenticates_and_refuses_replacement() {
     let base = tempfile::tempdir().unwrap();
     let state = base.path().join("state");
@@ -425,6 +523,17 @@ fn recovery_preserves_content_history_pending_deletes_and_quarantines_authority(
         "비밀.txt",
     ]);
     let payload_hash = sha(&root.join("비밀.txt"));
+    let nested_output = root.join("nested-restoration");
+    reject(&[
+        "device-recover",
+        "--backup",
+        s(&backup),
+        "--key",
+        s(&key),
+        "--output",
+        s(&nested_output),
+    ]);
+    assert!(!nested_output.exists());
     let output = base.path().join("recovered");
     let restored = json(&[
         "device-recover",

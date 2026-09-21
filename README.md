@@ -4,6 +4,8 @@
 GitHub Actions에서 Windows·macOS·Ubuntu를 시험합니다. 실장비·NAS·실제 WAN·장시간 안정성 검증과 배포 작업은 진행 중입니다.
 Resilio Active Everywhere는 참고 기준이며, 프로토콜 호환성이나 성능 동등성을 주장하지 않습니다.
 
+[장치 전체 암호화 백업·복구](docs/device-backup.md)를 통해 새 폴더에 파일·이전 버전·삭제 대기 기록을 복구할 수 있습니다. 복구 직후에는 권한과 자동 작업을 비활성화하며, peer와 최신 상태를 재조정한 뒤 원래 동기화 모드를 활성화합니다.
+
 ## 시작하기
 
 [폴더 동기화 안내](docs/folder-quickstart.md)에 따라 장치 초기화, 인증서 교환,

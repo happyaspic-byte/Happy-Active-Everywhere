@@ -285,6 +285,21 @@ pub fn recover(
     let parent = output.parent().unwrap();
     let (decoded, mut header) = archive::decode(backup, key, Some(parent))?;
     let summary = header.summary(decoded.path())?;
+    for config in summary["folders"]
+        .as_array()
+        .context("invalid folder summary")?
+    {
+        let config: share::Config = serde_json::from_value(config.clone())?;
+        // An old absolute path is provenance, never a write target. If it is
+        // still mounted here, do not publish credentials inside that share.
+        if config.root.is_absolute() && config.root.try_exists()? {
+            let root = config.root.canonicalize()?;
+            ensure!(
+                !output.starts_with(&root) && !root.starts_with(&output),
+                "recovery workspace must not overlap an original synchronized root"
+            );
+        }
+    }
     let old_identity = identity::fingerprint(&header.certificate);
     if let Some(expected) = retired_device {
         ensure!(

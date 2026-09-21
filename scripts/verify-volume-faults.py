@@ -285,6 +285,8 @@ def fill_volume(trial):
 
 
 def scenario(trial, name):
+    if name in ['device-backup-full', 'device-recover-full']:
+        return device_scenario(trial, name)
     a, b = trial.pair(state_on_volume=name == 'state-full')
     original = sha(b['root'] / 'note.bin')
     before = trial.snapshot(b, 'before-fault')
@@ -340,6 +342,38 @@ def scenario(trial, name):
     return {**evidence, **trial.settled(a, b, expected, expected_heads)}
 
 
+def device_scenario(trial, name):
+    node = trial.node('source')
+    payload = node['root'] / 'payload.bin'
+    payload.write_bytes(os.urandom(8 * MIB))
+    expected = sha(payload)
+    key = trial.directory / 'offline-key.agekey'
+    recipient = json.loads(trial.cli('device-keygen', '--output', key).stdout)['recipient']
+    backup = trial.directory / 'backup.age'
+    if name == 'device-backup-full':
+        output = trial.mount / 'backup.age'
+        command = ['device-backup', '--state', node['state'], '--recipient', recipient, '--output', output]
+    else:
+        trial.cli('device-backup', '--state', node['state'], '--recipient', recipient, '--output', backup)
+        output = trial.mount / 'recovered'
+        command = ['device-recover', '--backup', backup, '--key', key, '--output', output]
+    filler, evidence = fill_volume(trial)
+    result = trial.cli(*command, failure=True)
+    error = result.stderr.decode(errors='replace')
+    assert result.returncode != 0, 'full volume operation unexpectedly succeeded'
+    assert any(text in error.lower() for text in ['space', 'full', 'os error 28', 'disk i/o error']), error
+    assert not output.exists(), 'failed device operation published a partial result'
+    assert sha(payload) == expected, 'device operation changed the source'
+    filler.unlink()  # Only this test's synthetic reserve is removed.
+    trial.cli(*command)
+    if name == 'device-backup-full':
+        trial.cli('device-inspect', '--backup', output, '--key', key)
+    else:
+        assert sha(output / 'folders' / 'fault' / 'payload.bin') == expected
+    return {**evidence, 'observed_error': error, 'source_sha256': expected,
+            'partial_output_absent': True, 'retry_verified': True}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, required=True)
@@ -358,7 +392,8 @@ def main():
               'power_loss_verified': False, 'scenarios': {}, 'status': 'running'}
     started = time.monotonic()
     try:
-        for name in ['destination-full', 'state-full', 'detached', 'read-only', 'detached-inflight']:
+        for name in ['destination-full', 'state-full', 'detached', 'read-only', 'detached-inflight',
+                     'device-backup-full', 'device-recover-full']:
             print(f'RUN {name}', flush=True)
             trial = None
             try:
