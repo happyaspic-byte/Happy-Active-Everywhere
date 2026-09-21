@@ -250,13 +250,19 @@ fn three_devices_converge_after_different_orders_of_offline_edits() {
     let a = Node::new(tmp.path(), "a");
     let b = Node::new(tmp.path(), "b");
     let c = Node::new(tmp.path(), "c");
-    for (left, right) in [(&a,&b),(&a,&c),(&b,&a),(&b,&c),(&c,&a),(&c,&b)] { left.allow(right); }
+    for (left, right) in [(&a, &b), (&a, &c), (&b, &a), (&b, &c), (&c, &a), (&c, &b)] {
+        left.allow(right);
+    }
     fs::write(a.root.join("note"), b"initial").unwrap();
-    sync(&a, &b); sync(&a, &c);
+    sync(&a, &b);
+    sync(&a, &c);
     for (node, bytes) in [(&a, b"edit a"), (&b, b"edit b"), (&c, b"edit c")] {
         fs::write(node.root.join("note"), bytes).unwrap();
     }
-    sync(&a, &b); sync(&b, &c); sync(&c, &a); sync(&a, &b);
+    sync(&a, &b);
+    sync(&b, &c);
+    sync(&c, &a);
+    sync(&a, &b);
     let expected = head_state(&a, "note");
     assert_eq!(expected["heads"].as_array().unwrap().len(), 3);
     assert_eq!(head_state(&b, "note"), expected);
@@ -264,37 +270,88 @@ fn three_devices_converge_after_different_orders_of_offline_edits() {
     let visible = sha(&fs::read(a.root.join("note")).unwrap());
     assert_eq!(sha(&fs::read(b.root.join("note")).unwrap()), visible);
     assert_eq!(sha(&fs::read(c.root.join("note")).unwrap()), visible);
-    for node in [&a,&b,&c] {
+    for node in [&a, &b, &c] {
         let conflicts: Value = serde_json::from_str(&node.command("share-conflicts", &[])).unwrap();
-        let mut got: Vec<_> = conflicts[0]["revisions"].as_array().unwrap().iter().map(|r| sha(&fs::read(r["object_path"].as_str().unwrap()).unwrap())).collect();
+        let mut got: Vec<_> = conflicts[0]["revisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| sha(&fs::read(r["object_path"].as_str().unwrap()).unwrap()))
+            .collect();
         let mut expected = vec![sha(b"edit a"), sha(b"edit b"), sha(b"edit c")];
-        got.sort(); expected.sort(); assert_eq!(got, expected);
+        got.sort();
+        expected.sort();
+        assert_eq!(got, expected);
     }
 }
 
 #[test]
 fn simultaneous_delete_and_edit_preserve_the_edit_and_the_tombstone() {
-    let tmp = TempDir::new().unwrap(); let (a,b) = pair(tmp.path());
-    fs::write(a.root.join("note"), b"initial").unwrap(); sync(&a,&b);
+    let tmp = TempDir::new().unwrap();
+    let (a, b) = pair(tmp.path());
+    fs::write(a.root.join("note"), b"initial").unwrap();
+    sync(&a, &b);
     fs::remove_file(a.root.join("note")).unwrap();
     a.command("share-approve-deletes", &["--all"]);
     fs::write(b.root.join("note"), b"offline edit").unwrap();
-    sync(&a,&b);
-    for node in [&a,&b] {
+    sync(&a, &b);
+    for node in [&a, &b] {
         assert_eq!(fs::read(node.root.join("note")).unwrap(), b"offline edit");
-        let heads = head_state(node,"note")["heads"].as_array().unwrap().clone();
-        assert_eq!(heads.len(),2);
+        let heads = head_state(node, "note")["heads"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(heads.len(), 2);
         assert!(heads.iter().any(|h| h["content"]["kind"] == "deleted"));
     }
 }
 
 #[test]
 fn long_offline_peer_does_not_resurrect_a_deleted_file() {
-    let tmp = TempDir::new().unwrap(); let (a,b) = pair(tmp.path());
-    let c = Node::new(tmp.path(),"c"); a.allow(&c); c.allow(&a);
-    fs::write(a.root.join("note"),b"initial").unwrap(); sync(&a,&b); sync(&a,&c);
-    fs::remove_file(a.root.join("note")).unwrap(); a.command("share-approve-deletes", &["--all"]);
-    sync(&a,&b); sync(&c,&a);
-    for node in [&a,&b,&c] { assert!(!node.root.join("note").exists()); }
-    assert_eq!(head_state(&a,"note"),head_state(&c,"note"));
+    let tmp = TempDir::new().unwrap();
+    let (a, b) = pair(tmp.path());
+    let c = Node::new(tmp.path(), "c");
+    a.allow(&c);
+    c.allow(&a);
+    fs::write(a.root.join("note"), b"initial").unwrap();
+    sync(&a, &b);
+    sync(&a, &c);
+    fs::remove_file(a.root.join("note")).unwrap();
+    a.command("share-approve-deletes", &["--all"]);
+    sync(&a, &b);
+    sync(&c, &a);
+    for node in [&a, &b, &c] {
+        assert!(!node.root.join("note").exists());
+    }
+    assert_eq!(head_state(&a, "note"), head_state(&c, "note"));
+}
+
+#[test]
+fn explicit_conflict_resolution_and_historical_restore_converge() {
+    let tmp = TempDir::new().unwrap();
+    let (a, b) = pair(tmp.path());
+    fs::write(a.root.join("note"), b"original").unwrap();
+    sync(&a, &b);
+    fs::write(a.root.join("note"), b"edit a").unwrap();
+    fs::write(b.root.join("note"), b"edit b").unwrap();
+    sync(&a, &b);
+    let conflicts: Value = serde_json::from_str(&a.command("share-conflicts", &[])).unwrap();
+    let choice = conflicts[0]["revisions"].as_array().unwrap().iter().find(|r| {
+        fs::read(r["object_path"].as_str().unwrap()).unwrap() == b"edit b"
+    }).unwrap()["id"].as_str().unwrap().to_owned();
+    a.command("share-resolve", &["--path", "note", "--revision", &choice]);
+    sync(&a, &b);
+    for node in [&a, &b] {
+        assert_eq!(fs::read(node.root.join("note")).unwrap(), b"edit b");
+        assert_eq!(head_state(node, "note")["heads"].as_array().unwrap().len(), 1);
+    }
+    let history: Value = serde_json::from_str(&a.command("share-history", &["--path", "note"])).unwrap();
+    let original = history.as_array().unwrap().iter().find(|r| {
+        r["object_path"].as_str().is_some_and(|p| fs::read(p).unwrap() == b"original")
+    }).unwrap()["id"].as_str().unwrap().to_owned();
+    a.command("share-restore", &["--path", "note", "--revision", &original]);
+    sync(&a, &b);
+    assert_eq!(fs::read(a.root.join("note")).unwrap(), b"original");
+    assert_eq!(fs::read(b.root.join("note")).unwrap(), b"original");
+    assert_eq!(head_state(&a, "note"), head_state(&b, "note"));
 }
