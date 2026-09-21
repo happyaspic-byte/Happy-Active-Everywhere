@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use everywhere::{identity, transport};
 use std::{net::SocketAddr, path::PathBuf};
 
@@ -12,8 +12,71 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 }
+#[derive(Args)]
+struct ShareArgs {
+    #[arg(long)]
+    state: PathBuf,
+    #[arg(long)]
+    folder: String,
+}
 #[derive(Subcommand)]
 enum Command {
+    /// Register a folder and create its independent synchronization index.
+    ShareInit {
+        #[command(flatten)]
+        share: ShareArgs,
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long, value_enum, default_value = "bidirectional")]
+        mode: everywhere::versions::Mode,
+    },
+    /// Grant or remove a trusted device's access to one folder.
+    SharePeer {
+        #[command(flatten)]
+        share: ShareArgs,
+        #[arg(long)]
+        peer: String,
+        #[arg(long)]
+        remove: bool,
+    },
+    /// Record local changes; missing paths remain pending approval.
+    ShareScan(ShareArgs),
+    /// Approve all currently missing local paths as deletion revisions.
+    ShareApproveDeletes {
+        #[command(flatten)]
+        share: ShareArgs,
+        #[arg(long)]
+        all: bool,
+    },
+    /// Inspect folder versions, pending deletions and the index epoch.
+    ShareStatus(ShareArgs),
+    /// List concurrent revisions and their preserved content objects.
+    ShareConflicts(ShareArgs),
+    /// Exchange folder changes with one explicitly approved device.
+    Sync {
+        #[command(flatten)]
+        share: ShareArgs,
+        #[arg(long)]
+        peer: String,
+        #[arg(long)]
+        addr: SocketAddr,
+        #[arg(long)]
+        continuous: bool,
+        #[arg(long, default_value_t = 2000, value_parser = clap::value_parser!(u64).range(250..))]
+        interval_ms: u64,
+    },
+    /// Listen for authenticated changes to one folder from one approved peer.
+    SyncServe {
+        #[command(flatten)]
+        share: ShareArgs,
+        #[arg(long)]
+        peer: String,
+        #[arg(long, default_value = "127.0.0.1:7444")]
+        listen: SocketAddr,
+        #[arg(long)]
+        once: bool,
+    },
+
     /// Restore preserved file content, saving the current version first.
     Restore {
         #[arg(long)]
@@ -111,6 +174,47 @@ enum Command {
 #[tokio::main(worker_threads = 2)]
 async fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::ShareInit { share, root, mode } => {
+            everywhere::share::Share::create(&share.state, &share.folder, &root, mode)?;
+            println!("initialized");
+        }
+        Command::SharePeer { share, peer, remove } => {
+            everywhere::share::grant(&share.state, &share.folder, &peer, remove)?;
+            println!("updated");
+        }
+        Command::ShareScan(share) => {
+            let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
+            println!("{}", serde_json::to_string(&folder.scan(false)?)?);
+        }
+        Command::ShareApproveDeletes { share, all } => {
+            anyhow::ensure!(all, "specify --all to approve the currently missing paths");
+            let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
+            println!("{}", serde_json::to_string(&folder.scan(true)?)?);
+        }
+        Command::ShareStatus(share) => {
+            let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
+            println!("{}", folder.status()?);
+        }
+        Command::ShareConflicts(share) => {
+            let folder = everywhere::share::Share::open(&share.state, &share.folder)?;
+            println!("{}", folder.conflicts()?);
+        }
+        Command::Sync { share, peer, addr, continuous, interval_ms } => {
+            loop {
+                let result = everywhere::sync::connect(&share.state, &share.folder, &peer, addr).await;
+                match result {
+                    Ok(()) => println!("{}", serde_json::json!({"status":"complete","folder":share.folder})),
+                    Err(error) if continuous => eprintln!("{}", serde_json::json!({"status":"retrying","error":format!("{error:#}")})),
+                    Err(error) => return Err(error),
+                }
+                if !continuous { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+            }
+        }
+        Command::SyncServe { share, peer, listen, once } => {
+            everywhere::sync::serve(&share.state, &share.folder, &peer, listen, once).await?;
+        }
+
         Command::Restore {
             version_file,
             output,

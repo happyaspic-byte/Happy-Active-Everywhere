@@ -252,3 +252,57 @@ mod tests {
         sent.unwrap();
     }
 }
+
+pub(crate) type Approval = std::sync::Arc<dyn Fn() -> Result<()> + Send + Sync>;
+
+pub(crate) async fn send_object<S>(stream: &mut S, source: &Path, hash: &str, check: Approval) -> Result<()>
+where S: AsyncRead + AsyncWrite + Unpin {
+    let timing = Timing::default();
+    check()?;
+    let source_path = source.to_owned();
+    let manifest = wire::work(stream, timing, move || Manifest::from_path(&source_path)).await?;
+    ensure!(manifest.hash == hash, "shared content object is corrupt");
+    wire::send(stream, &manifest, timing).await?;
+    let missing: Vec<u64> = wire::read(stream, timing).await?;
+    ensure!(missing.len() <= manifest.blocks.len() && missing.windows(2).all(|p| p[0] < p[1]), "invalid block request");
+    send_blocks(stream, Blocks { source, manifest: &manifest, missing: &missing, delay: Duration::ZERO }, || check()).await?;
+    let source_path = source.to_owned();
+    let expected = manifest.clone();
+    wire::work(stream, timing, move || {
+        ensure!(Manifest::from_path(&source_path)? == expected, "shared object changed during transfer");
+        Ok(())
+    }).await?;
+    check()?;
+    wire::send(stream, "commit", timing).await?;
+    let result: String = wire::read(stream, timing).await?;
+    ensure!(result == "complete", "object receiver did not complete");
+    Ok(())
+}
+
+pub(crate) async fn receive_object<S>(stream: &mut S, destination: &Path, hash: &str, check: Approval) -> Result<()>
+where S: AsyncRead + AsyncWrite + Unpin {
+    let timing = Timing::default();
+    let manifest: Manifest = wire::read(stream, timing).await?;
+    manifest.validate()?; ensure!(manifest.hash == hash, "unrequested content object");
+    check()?;
+    let target = destination.to_owned(); let expected = manifest.clone();
+    let (mut receiver, missing) = wire::work(stream, timing, move || {
+        let mut receiver = Receiver::open(&target, expected)?;
+        let missing = receiver.missing()?; Ok((receiver, missing))
+    }).await?;
+    wire::send(stream, &missing, timing).await?;
+    for index in missing {
+        check()?;
+        let received = timeout(timing.io, stream.read_u64()).await??;
+        ensure!(received == index, "unexpected object block");
+        let mut bytes = vec![0; block_len(&manifest, index)?];
+        timeout(timing.io, stream.read_exact(&mut bytes)).await??;
+        receiver = wire::work(stream, timing, move || { receiver.put(index, &bytes)?; Ok(receiver) }).await?;
+        wire::send(stream, index, timing).await?;
+    }
+    let commit: String = wire::read(stream, timing).await?;
+    ensure!(commit == "commit", "uncommitted content object");
+    wire::work(stream, timing, move || receiver.finish_checked(|| check())).await?;
+    wire::send(stream, "complete", timing).await?;
+    Ok(())
+}

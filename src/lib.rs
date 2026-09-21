@@ -7,3 +7,6 @@ pub mod versions;
 mod wire;
 
 pub mod index;
+mod root;
+pub mod share;
+pub mod sync;

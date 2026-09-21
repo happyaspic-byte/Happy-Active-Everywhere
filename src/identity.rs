@@ -113,6 +113,9 @@ impl Identity {
         ))
     }
     pub fn server(&self) -> Result<Arc<ServerConfig>> {
+        self.server_protocol(PROTOCOL)
+    }
+    pub(crate) fn server_protocol(&self, protocol: &[u8]) -> Result<Arc<ServerConfig>> {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
             Arc::new(self.roots()?),
@@ -124,18 +127,21 @@ impl Identity {
             .with_protocol_versions(&[&rustls::version::TLS13])?
             .with_client_cert_verifier(verifier)
             .with_single_cert(cert, key)?;
-        config.alpn_protocols = vec![PROTOCOL.to_vec()];
+        config.alpn_protocols = vec![protocol.to_vec()];
         config.send_tls13_tickets = 0;
         Ok(Arc::new(config))
     }
     pub fn client(&self) -> Result<Arc<ClientConfig>> {
+        self.client_protocol(PROTOCOL)
+    }
+    pub(crate) fn client_protocol(&self, protocol: &[u8]) -> Result<Arc<ClientConfig>> {
         let (cert, key) = self.own()?;
         let mut config =
             ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
                 .with_protocol_versions(&[&rustls::version::TLS13])?
                 .with_root_certificates(self.roots()?)
                 .with_client_auth_cert(cert, key)?;
-        config.alpn_protocols = vec![PROTOCOL.to_vec()];
+        config.alpn_protocols = vec![protocol.to_vec()];
         config.resumption = rustls::client::Resumption::disabled();
         Ok(Arc::new(config))
     }
