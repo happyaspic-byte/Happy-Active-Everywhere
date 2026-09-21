@@ -23,7 +23,10 @@ fn scan_persists_edits_and_tombstones_without_wall_clock() {
         everywhere::versions::Relation::After
     );
     fs::remove_file(root.join("one")).unwrap();
-    assert_eq!(index.scan(false).unwrap()[0].change, Change::DeletionPending);
+    assert_eq!(
+        index.scan(false).unwrap()[0].change,
+        Change::DeletionPending
+    );
     assert!(index.entries().unwrap()[0].hash.is_some());
     assert!(index.entries().unwrap()[0].pending_deletion);
     assert!(index.scan(false).unwrap().is_empty());

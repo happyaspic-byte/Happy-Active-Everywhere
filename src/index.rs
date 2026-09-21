@@ -210,7 +210,8 @@ impl Index {
                 if transaction.execute(
                     "INSERT OR IGNORE INTO pending_deletions VALUES(?1)",
                     [&prior.path],
-                )? > 0 {
+                )? > 0
+                {
                     events.push(Event {
                         path: prior.path.clone(),
                         change: Change::DeletionPending,
