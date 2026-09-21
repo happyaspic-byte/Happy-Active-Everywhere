@@ -375,3 +375,79 @@ fn readonly_partial_file_preserves_original() {
     assert_eq!(fs::read(&target).unwrap(), b"old");
     fs::set_permissions(&partial, fs::Permissions::from_mode(0o600)).unwrap();
 }
+
+#[test]
+fn folder_cli_persists_index_and_requires_delete_approval() {
+    let d = TempDir::new().unwrap();
+    let root = d.path().join("folder");
+    let db = d.path().join("state.sqlite");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("one"), b"hello").unwrap();
+    ok(&[
+        "folder-init",
+        "--db",
+        s(&db),
+        "--root",
+        s(&root),
+        "--device",
+        "a",
+    ]);
+    let created = ok(&["scan", "--db", s(&db), "--root", s(&root), "--device", "a"]);
+    assert!(created.contains("created"));
+    let repeated = ok(&["scan", "--db", s(&db), "--root", s(&root), "--device", "a"]);
+    assert_eq!(repeated.trim(), "[]");
+    fs::remove_file(root.join("one")).unwrap();
+    assert!(
+        !cli(&["scan", "--db", s(&db), "--root", s(&root), "--device", "a"])
+            .status
+            .success()
+    );
+    let deleted = ok(&[
+        "scan",
+        "--db",
+        s(&db),
+        "--root",
+        s(&root),
+        "--device",
+        "a",
+        "--allow-deletes",
+    ]);
+    assert!(deleted.contains("deleted"));
+    let entries = ok(&[
+        "index-status",
+        "--db",
+        s(&db),
+        "--root",
+        s(&root),
+        "--device",
+        "a",
+    ]);
+    let entries: serde_json::Value = serde_json::from_str(&entries).unwrap();
+    assert_eq!(entries[0]["path"], "one");
+    assert!(entries[0]["hash"].is_null());
+    assert_eq!(entries[0]["clock"]["a"], 2);
+}
+
+#[test]
+fn restore_cli_preserves_replaced_current_version() {
+    let d = TempDir::new().unwrap();
+    let target = d.path().join("document");
+    let version = d.path().join("saved-version");
+    fs::write(&target, b"current").unwrap();
+    fs::write(&version, b"historical").unwrap();
+    let result = ok(&[
+        "restore",
+        "--version-file",
+        s(&version),
+        "--output",
+        s(&target),
+    ]);
+    assert!(result.contains("restored"));
+    assert_eq!(fs::read(&target).unwrap(), b"historical");
+    assert_eq!(fs::read(&version).unwrap(), b"historical");
+    let saved: Vec<_> = fs::read_dir(d.path().join(".everywhere-versions"))
+        .unwrap()
+        .map(|e| fs::read(e.unwrap().path()).unwrap())
+        .collect();
+    assert!(saved.contains(&b"current".to_vec()));
+}

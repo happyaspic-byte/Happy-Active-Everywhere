@@ -14,7 +14,7 @@ Cargo/rustc 1.97.1. 빈 저장소에서 feature/safe-transfer-alpha 브랜치 �
 - 처음 CLI 테스트의 수신 stdout pipe를 조기 닫는 테스트 결함을 수정하고 전체 재실행.
 
 ## 자동화 결과
-`cargo test --locked --all-targets -- --nocapture`: CLI 6개 + 저장소 8개 통과.
+`cargo test --locked --all-targets -- --nocapture`: CLI 8개 + 저장소 8개 + 인덱스 4개 + 버전 판단 3개 = 23개 통과.
 
 - CLI: 정상 전송 2회, 송신·수신 강제 종료 후 재개 2회, SHA-256 동일.
 - 재개 2회 모두 검증된 블록 1개 재사용, 나머지 5개 전송.
@@ -22,6 +22,10 @@ Cargo/rustc 1.97.1. 빈 저장소에서 feature/safe-transfer-alpha 브랜치 �
 - 전송 중 원본 변경과 실제 파일 권한 오류에서 기존 대상 유지.
 - 잘못된 블록·부분 데이터 손상·저널 손상·이전 버전 부분 복사.
 - 일치 블록 재사용·동일 대상 수신 잠금·로컬 수정·빈 파일·잘못된 manifest·symlink.
+- CLI 폴더 등록·반복 재검사·삭제 승인·상태 영속화·현재 버전 보존 복원.
+- 폴더 marker 소실·경로 변경·DB 손상에서 데이터 보존.
+- 벡터 인과관계·삭제/수정 동시 충돌·세 모드 판정 (라이브러리 범위).
+- 역슬래시 파일명과 중첩 경로의 별칭 충돌 실패를 확인하고 스캔 거부로 수정.
 
 `cargo clippy --locked --all-targets -- -D warnings`: 통과.
 `cargo build --release`: 통과.
@@ -58,7 +62,7 @@ SHA-256: `91f2ba191af80a72e75595bb4f4b1e5f50a6e0368b356f289829c9b31c382b45`.
 - 실제 두 장비, Windows, Ubuntu, Synology, LAN/WAN, 3~10장치.
 - ENOSPC, 마운트 해제, 실제 전원 차단, OS별 원자 교체·서비스 수명주기.
 - 100 GiB: 현재 여유 공간 약 96 GiB로 원본·대상 확보 불가.
-- 100,000·1,000,000파일 인덱스, SQLite 복구, 동기화 모드·충돌·삭제.
+- 100,000·1,000,000파일 전송, SQLite 자동 복구, 실제 동기화 모드·충돌·삭제 전파.
 - 관리 API·웹 화면, 설치·업데이트·롤백·제거, 72시간·7일 시험.
 - Resilio Sync 비교 및 Active Everywhere 직접 측정.
 
@@ -66,3 +70,5 @@ SHA-256: `91f2ba191af80a72e75595bb4f4b1e5f50a6e0368b356f289829c9b31c382b45`.
 `storage-red.log`, `resume-red.log`, `version-red.log`, `alpha-final-tests.log`,
 `release-build.log`, `clippy-final.log`, `benchmark-10gib.json`으로 저장했다.
 본 문서와 저장소 테스트·실측 JSON은 지속 보존용 결과다.
+
+인덱스·복원 추가 검증 로그: `versions-red.log`, `versions-green.log`, `index-red.log`, `index-cli-red.log`, `index-path-red.log`, `restore-red.log`, `index-restore-tests.log`, `index-clippy.log`.

@@ -300,3 +300,21 @@ impl Receiver {
         Ok(())
     }
 }
+
+pub fn restore(version: &Path, target: &Path) -> Result<()> {
+    let manifest = Manifest::from_path(version)?;
+    let mut receiver = Receiver::open(target, manifest.clone())?;
+    let mut source = File::open(version)?;
+    let mut buffer = vec![0; BLOCK_SIZE];
+    for index in receiver.missing()? {
+        let len = block_len(&manifest, index)?;
+        source.seek(SeekFrom::Start(index * BLOCK_SIZE as u64))?;
+        source.read_exact(&mut buffer[..len])?;
+        receiver.put(index, &buffer[..len])?;
+    }
+    ensure!(
+        Manifest::from_path(version)? == manifest,
+        "version changed during restore"
+    );
+    receiver.finish()
+}

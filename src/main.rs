@@ -14,6 +14,42 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Restore preserved file content, saving the current version first.
+    Restore {
+        #[arg(long)]
+        version_file: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Create a local folder index outside the synchronized folder.
+    FolderInit {
+        #[arg(long)]
+        db: PathBuf,
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        device: String,
+    },
+    /// Rescan contents; missing files require explicit deletion approval.
+    Scan {
+        #[arg(long)]
+        db: PathBuf,
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        device: String,
+        #[arg(long)]
+        allow_deletes: bool,
+    },
+    /// Show persisted file versions and deletion records.
+    IndexStatus {
+        #[arg(long)]
+        db: PathBuf,
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        device: String,
+    },
     /// Create a new device identity; refuses existing state directories.
     Init {
         #[arg(long)]
@@ -64,6 +100,31 @@ enum Command {
 #[tokio::main(worker_threads = 2)]
 async fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::Restore {
+            version_file,
+            output,
+        } => {
+            everywhere::storage::restore(&version_file, &output)?;
+            println!("restored");
+        }
+        Command::FolderInit { db, root, device } => {
+            everywhere::index::Index::create(&db, &root, &device)?;
+            println!("initialized");
+        }
+        Command::Scan {
+            db,
+            root,
+            device,
+            allow_deletes,
+        } => {
+            let events =
+                everywhere::index::Index::open(&db, &root, &device)?.scan(allow_deletes)?;
+            println!("{}", serde_json::to_string(&events)?);
+        }
+        Command::IndexStatus { db, root, device } => {
+            let entries = everywhere::index::Index::open(&db, &root, &device)?.entries()?;
+            println!("{}", serde_json::to_string(&entries)?);
+        }
         Command::Init { state } => println!("{}", identity::init(&state)?),
         Command::Trust { state, cert } => println!("{}", identity::trust(&state, &cert)?),
         Command::Revoke { state, peer } => identity::revoke(&state, &peer)?,
