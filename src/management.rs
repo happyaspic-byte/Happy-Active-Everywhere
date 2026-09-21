@@ -140,6 +140,7 @@ async fn status(State(app): State<Arc<App>>) -> Response {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
 enum Operation {
+    TrustPeer { certificate: Vec<u8>, expected: String },
     SaveJob {
         job: crate::jobs::Config,
     },
@@ -190,6 +191,18 @@ async fn command(State(app): State<Arc<App>>, Json(operation): Json<Operation>) 
     outcome(
         match tokio::task::spawn_blocking(move || -> Result<Value> {
             match operation {
+                Operation::TrustPeer { certificate, expected } => {
+                    identity::valid_peer(&expected)?;
+                    ensure!(certificate.len() <= 64 * 1024 && identity::fingerprint(&certificate) == expected, "certificate fingerprint does not match the independently verified device");
+                    let temporary = app.state.join(format!("peer-import-{}.der", random_id()?));
+                    let mut file = OpenOptions::new().create_new(true).write(true).open(&temporary)?;
+                    file.write_all(&certificate)?;
+                    file.sync_all()?;
+                    drop(file);
+                    let result = identity::trust(&app.state, &temporary);
+                    let _ = fs::remove_file(temporary);
+                    return Ok(json!({"peer":result?}));
+                }
                 Operation::SaveJob { job } => {
                     app.jobs.save(job)?;
                 }

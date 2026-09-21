@@ -261,6 +261,7 @@ pub(crate) async fn receive_object<S>(
     stream: &mut S,
     destination: &Path,
     hash: &str,
+    basis: Option<&Path>,
     check: Approval,
 ) -> Result<()>
 where
@@ -272,10 +273,11 @@ where
     ensure!(manifest.hash == hash, "unrequested content object");
     check()?;
     let target = destination.to_owned();
+    let basis = basis.map(Path::to_owned);
     let expected = manifest.clone();
     let (mut receiver, missing) = wire::work(stream, timing, move || {
         let mut receiver = Receiver::open(&target, expected)?;
-        let missing = receiver.missing()?;
+        let missing = receiver.missing_from(basis.as_deref())?;
         Ok((receiver, missing))
     })
     .await?;

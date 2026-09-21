@@ -465,7 +465,11 @@ fn paged_metadata_and_nested_deletions_converge_without_missing_paths() {
     }
     sync(&a, &b);
     for index in 0..270 {
-        assert!(b.root.join(format!("nested/inside/file-{index:04}")).is_file());
+        assert!(
+            b.root
+                .join(format!("nested/inside/file-{index:04}"))
+                .is_file()
+        );
     }
     fs::remove_dir_all(a.root.join("nested")).unwrap();
     a.command("share-approve-deletes", &["--all"]);
@@ -483,5 +487,8 @@ fn folder_scans_remain_usable_after_legacy_file_restoration() {
     fs::write(&previous, b"restored through old CLI").unwrap();
     everywhere::storage::restore(&previous, &a.root.join("note")).unwrap();
     a.command("share-scan", &[]);
-    assert_eq!(fs::read(a.root.join("note")).unwrap(), b"restored through old CLI");
+    assert_eq!(
+        fs::read(a.root.join("note")).unwrap(),
+        b"restored through old CLI"
+    );
 }

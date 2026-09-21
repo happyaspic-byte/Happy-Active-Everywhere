@@ -278,7 +278,13 @@ impl Root {
                 Err(e) => return Err(e.into()),
             };
             ensure!(bytes.len() <= 64 * 1024, "oversized recovery record");
-            let intent: Intent = serde_json::from_slice(&bytes)?;
+            let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+            if value.get("intent").is_some() && value.get("target").is_some() {
+                // Single-file Receiver owns this journal and its recovery.
+                // It can coexist with a folder share without being misparsed.
+                continue;
+            }
+            let intent: Intent = serde_json::from_value(value)?;
             validate_path(&intent.path)?;
             let actual = self.content(&intent.path)?;
             if actual.as_ref() == Some(&intent.after)

@@ -561,6 +561,14 @@ impl Share {
         transaction.commit()?;
         Ok(())
     }
+    pub fn basis_object(&self, hash: &str) -> Result<Option<PathBuf>> {
+        self.object_path(hash)?;
+        let old: Option<String> = self.connection.query_row(
+            "SELECT json_extract(e.materialized,'$.hash') FROM incoming i JOIN entries e ON e.path=i.path JOIN json_each(i.versions,'$.heads') h WHERE json_extract(h.value,'$.content.hash')=?1 AND json_extract(e.materialized,'$.kind')='file' LIMIT 1",
+            [hash], |r| r.get(0),
+        ).optional()?;
+        old.map(|hash| self.object_path(&hash)).transpose()
+    }
     pub fn missing_objects(&self, limit: usize) -> Result<Vec<String>> {
         ensure!(limit <= 64, "object request page too large");
         let mut statement = self

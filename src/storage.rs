@@ -317,10 +317,16 @@ impl Receiver {
         })
     }
     pub fn missing(&mut self) -> Result<Vec<u64>> {
+        self.missing_from(None)
+    }
+    pub(crate) fn missing_from(&mut self, basis: Option<&Path>) -> Result<Vec<u64>> {
         let mut missing = Vec::new();
         let mut buffer = vec![0; BLOCK_SIZE];
         let mut existing = if regular(&self.target)? {
             Some(File::open(&self.target)?)
+        } else if let Some(basis) = basis {
+            ensure!(regular(basis)?, "reuse basis must be a regular file");
+            Some(File::open(basis)?)
         } else {
             None
         };
