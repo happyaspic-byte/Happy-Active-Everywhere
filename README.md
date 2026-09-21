@@ -1,4 +1,4 @@
-# Everywhere — 개인용 P2P 동기화 개발 프로젝트
+# Happy-Active-Everywhere — 개인용 P2P 동기화 개발 프로젝트
 
 현재 결과물: **실험용 단일 파일 전송 CLI 알파**. macOS Apple Silicon에서 개발 중.
 실제 사용자 데이터 적용은 후속 오류 주입·실장비 검증 후 판단한다.
