@@ -1,115 +1,121 @@
-# Run management at login
+# Install and control a background service
 
-These are per-user deployment instructions. CI verifies the executable and
-installer, but it has not verified startup on your physical account/device.
-Initialize the state directory and approve peers before enabling background
-jobs. Use the installed launcher so updates select the new version after a
-service restart. Stop the service before updating or rolling back.
+Install a verified package and initialize its device state first. Approve peers,
+register folders and save enabled synchronization jobs in the local dashboard.
+The service runs that same manager and resumes its persisted jobs.
 
-## Linux: systemd user service
+## Install and start
 
-Create `~/.config/systemd/user/everywhere.service`:
-
-```ini
-[Unit]
-Description=Happy Active Everywhere personal synchronization
-After=network-online.target
-
-[Service]
-Type=simple
-ExecStart=%h/.local/opt/everywhere/everywhere manage --state %h/.local/state/everywhere --listen 127.0.0.1:7445
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=30
-KillMode=control-group
-UMask=0077
-
-[Install]
-WantedBy=default.target
-```
-
-Adapt the paths if your installation differs. For paths containing spaces,
-quote the executable and each path argument. Validate and enable:
+On macOS/Linux, use the installed launcher and your existing absolute state path:
 
 ```sh
-systemd-analyze --user verify ~/.config/systemd/user/everywhere.service
-systemctl --user daemon-reload
-systemctl --user enable --now everywhere.service
-systemctl --user status everywhere.service
-journalctl --user -u everywhere.service
+"$HOME/.local/opt/everywhere/everywhere" service install \
+  --state /absolute/path/everywhere-state \
+  --prefix "$HOME/.local/opt/everywhere" \
+  --listen 127.0.0.1:7445
 ```
 
-Stop before updates: `systemctl --user stop everywhere.service`.
-Remove autostart: `systemctl --user disable --now everywhere.service`.
-This is a user-login service; running while logged out requires an explicit
-host-level service/linger policy configured by the machine owner.
-
-## macOS: LaunchAgent
-
-Create `~/Library/LaunchAgents/local.happy.everywhere.plist`, replacing both
-`/Users/YOUR_USER` paths with your real absolute paths:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>local.happy.everywhere</string>
-  <key>ProgramArguments</key><array>
-    <string>/Users/YOUR_USER/.local/opt/everywhere/everywhere</string>
-    <string>manage</string><string>--state</string>
-    <string>/Users/YOUR_USER/.local/state/everywhere</string>
-    <string>--listen</string><string>127.0.0.1:7445</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ThrottleInterval</key><integer>5</integer>
-</dict></plist>
-```
-
-```sh
-plutil -lint ~/Library/LaunchAgents/local.happy.everywhere.plist
-launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/local.happy.everywhere.plist
-launchctl print "gui/$(id -u)/local.happy.everywhere"
-```
-
-Stop before updates with:
-
-```sh
-launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/local.happy.everywhere.plist
-```
-
-Bootstrap again after updating. To uninstall autostart, boot out and remove
-only this plist. The OS may request permission to access protected user
-folders; grant only the folders you intended to synchronize.
-
-## Windows: Task Scheduler, current user
-
-Run these in PowerShell 7 after changing the state path to your initialized
-device state:
+In PowerShell 7 on Windows:
 
 ```powershell
-$EverywhereLauncher = "$env:LOCALAPPDATA\Everywhere\everywhere.ps1"
-$EverywhereState = "$env:LOCALAPPDATA\EverywhereState"
-$EverywhereUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$EverywhereAction = New-ScheduledTaskAction -Execute (Get-Command pwsh).Source -Argument ('-NoProfile -File "' + $EverywhereLauncher + '" manage --state "' + $EverywhereState + '" --listen 127.0.0.1:7445')
-$EverywhereTrigger = New-ScheduledTaskTrigger -AtLogOn -User $EverywhereUser
-$EverywherePrincipal = New-ScheduledTaskPrincipal -UserId $EverywhereUser -LogonType Interactive -RunLevel Limited
-$EverywhereSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName 'Happy Active Everywhere' -Action $EverywhereAction -Trigger $EverywhereTrigger -Principal $EverywherePrincipal -Settings $EverywhereSettings
-Start-ScheduledTask -TaskName 'Happy Active Everywhere'
-Get-ScheduledTaskInfo -TaskName 'Happy Active Everywhere'
+& "$env:LOCALAPPDATA\Everywhere\everywhere.ps1" service install `
+  --state "$env:LOCALAPPDATA\EverywhereState" `
+  --prefix "$env:LOCALAPPDATA\Everywhere" `
+  --listen 127.0.0.1:7445
 ```
 
-Before an update, use `Stop-ScheduledTask -TaskName 'Happy Active Everywhere'`.
-To remove autostart, stop the task and run
-`Unregister-ScheduledTask -TaskName 'Happy Active Everywhere'`.
-The task uses the current user's permissions, not administrator privileges.
-PowerShell must be installed and the host's script execution policy must allow
-the local installed launcher.
+`install` registers login startup, starts the service and waits for authenticated
+manager health. Repeating it with the same settings is safe. A different state,
+installation prefix or listen address requires uninstalling the old registration
+first. The port must be nonzero and bound to a loopback address. Each state has
+its own service identifier, so separate test devices do not share a registration.
 
-## Verify after restart
+- macOS uses a LaunchAgent in the current user's `~/Library/LaunchAgents` and
+  requires that user's GUI login session.
+- Linux uses a systemd user unit under `$XDG_CONFIG_HOME/systemd/user` (normally
+  `~/.config/systemd/user`). A reachable user manager/bus is required. The product
+  does not enable linger, install a root unit or change machine login policy.
+- Windows uses an interactive current-user Scheduled Task, with limited user
+  privileges and no stored password. Windows PowerShell's ScheduledTasks module
+  and the user's normal script execution policy must permit the local helper.
+  Failed tasks retry at one-minute intervals. This is not a pre-login Windows
+  system service.
 
-Open `http://127.0.0.1:7445`, log in with the explicitly requested management
-token and inspect job status. Test one disposable file in both directions and
-verify its bytes. An enabled service or running job alone does not demonstrate
-successful peer authentication, writable mounts or convergence.
+OS file-access and background-item policies still apply to the actual account.
+Test a disposable folder before registering important data. Unsupported user
+sessions or denied access are reported as errors, not successful installation.
+
+## Lifecycle and status
+
+Use the installed launcher above, or `everywhere` when it is on PATH:
+
+```sh
+everywhere service status --state STATE
+everywhere service stop --state STATE
+everywhere service start --state STATE
+everywhere service restart --state STATE
+everywhere service uninstall --state STATE
+```
+
+`stop` stops the process and disables login startup until `start`. `restart`
+stops it and starts the currently selected installed version. The native manager
+restarts a failed service; the bootstrap's parent pipe prevents a killed service
+from leaving its manager and synchronization workers running independently.
+
+Status distinguishes:
+
+- `installed`: a bound deployment manifest exists.
+- `native.registered`, `native.enabled`, `native.running`: OS registration and
+  runtime state; installation alone does not prove a running manager.
+- `runner_live`: a bootstrap holds its state lock.
+- `healthy`: the live bootstrap's recorded manager PID answers authenticated
+  health for this device. An unrelated foreground manager does not satisfy it.
+
+Inspect `STATE/service/output.log` for manager diagnostics. It is private on Unix
+and rotates to `output.previous.log` on startup after it exceeds 1 MiB. Individual
+job errors and last successful synchronization remain in the dashboard/API.
+Health does not prove a reachable peer or successful file transfer.
+
+Uninstall removes only the owned native registration and deployment manifest.
+It preserves device credentials, jobs, folders, history, checkpoints and service
+logs. Repeating uninstall is safe. A changed/foreign definition or symlink is
+refused rather than overwritten or stopped; restore the intended registration
+before retrying. Never delete unrelated service-manager entries to repair one.
+
+## Updates and rollback
+
+```sh
+everywhere service stop --state STATE
+sh NEW_PACKAGE/scripts/install.sh install NEW_PACKAGE INSTALL_PREFIX
+everywhere service start --state STATE
+```
+
+Use `install.ps1` on Windows. For rollback, stop the service, run the existing
+installer's `rollback` action, and start it again. The retained bootstrap resolves
+and verifies the installer's `current` pointer on every launch, so restarts use
+the selected manager version. Do not remove the bootstrap's retained version:
+its path is recorded in `STATE/service/config.json`. Uninstall/reinstall the
+service before removing old versions or changing the deployment layout.
+
+Rolling back across an incompatible state/protocol change is not a data rollback.
+In particular, complete recovery reconciliation before using an older build that
+does not understand recovery holds. User data needs its own protected backup.
+
+## Reproduce native acceptance
+
+```sh
+python3 scripts/verify-service.py --binary target/debug/everywhere \
+  --report folder-report/service-local.json
+```
+
+The test uses unique temporary devices and a real native registration. It checks
+install/start/stop/restart/uninstall, foreign-registration refusal, installed
+version update/rollback, paused-job preservation, actual manager crash/restart
+and bidirectional TLS content with independent SHA-256. It removes its own
+registration in `finally`; failed fixtures and bounded diagnostic reports remain
+for inspection. CI explicitly prepares a user manager on disposable Linux
+runners if needed; that runner setup is not production deployment behavior.
+
+These tests exercise service/process restarts on the tested account. They do not
+reboot the OS, log the account out/in, or establish physical NAS/WAN or elapsed
+72-hour/7-day stability. The product remains an alpha pending those gates.

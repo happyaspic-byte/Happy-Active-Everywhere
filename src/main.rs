@@ -235,18 +235,64 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum ServiceCommand {
+    /// Register, enable and start a service using a verified installer prefix.
+    Install {
+        #[arg(long)]
+        state: PathBuf,
+        #[arg(long)]
+        prefix: PathBuf,
+        #[arg(long, default_value = "127.0.0.1:7445")]
+        listen: SocketAddr,
+    },
+    /// Enable login startup and start the service.
+    Start(ServiceArgs),
+    /// Stop the service and disable login startup until started again.
+    Stop(ServiceArgs),
+    /// Restart the service using the currently selected installed version.
+    Restart(ServiceArgs),
+    /// Inspect native registration and authenticated process health.
+    Status(ServiceArgs),
+    /// Remove the owned registration, preserving device and user data.
+    Uninstall(ServiceArgs),
     #[command(hide = true)]
     Run {
         #[arg(long)]
         state: PathBuf,
     },
 }
+#[derive(Args)]
+struct ServiceArgs {
+    #[arg(long)]
+    state: PathBuf,
+}
 #[tokio::main(worker_threads = 2)]
 async fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Service {
+            action:
+                ServiceCommand::Install {
+                    state,
+                    prefix,
+                    listen,
+                },
+        } => {
+            println!("{}", everywhere::service::install(&state, &prefix, listen)?);
+        }
+        Command::Service {
             action: ServiceCommand::Run { state },
         } => everywhere::service::run(&state)?,
+        Command::Service { action } => {
+            use everywhere::service::Action;
+            let (args, operation) = match action {
+                ServiceCommand::Start(args) => (args, Action::Start),
+                ServiceCommand::Stop(args) => (args, Action::Stop),
+                ServiceCommand::Restart(args) => (args, Action::Restart),
+                ServiceCommand::Status(args) => (args, Action::Status),
+                ServiceCommand::Uninstall(args) => (args, Action::Uninstall),
+                _ => unreachable!(),
+            };
+            println!("{}", everywhere::service::control(&args.state, operation)?);
+        }
         Command::Manage {
             state,
             listen,

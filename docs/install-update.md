@@ -70,8 +70,10 @@ resume according to their persisted enabled/paused state. A running process
 is not evidence of a reachable peer; inspect the last successful iteration
 and latest result. Device authorization and folder grants are still required.
 
-The foreground manager is currently the service entry point. Automatic login
-or OS service registration requires the corresponding deployment setup; it
-is not implied by extracting or installing the binary. To uninstall executables,
-stop management and remove only its installation prefix. Device state and
-synchronized data remain separately owned and are not deleted automatically.
+For login startup and native supervision, use `everywhere service install` with
+this installation prefix and initialized state. See [service lifecycle](services.md)
+for install/start/stop/status/uninstall, update/rollback and user-session requirements.
+Stop the service before updating or removing executables. Service uninstall keeps
+device state and synchronized data; remove only the intended installation prefix
+when uninstalling binaries. Preserve the registered bootstrap version until the
+service is uninstalled or re-registered.

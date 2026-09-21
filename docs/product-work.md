@@ -225,3 +225,26 @@ These are same-host results, not physical-device or WAN measurements.
 [Safety details and commands](safety-hardening.md) describe the test boundary,
 upgrade requirements, and remaining filesystem/ACL limitations. The 100 GiB
 test remains deferred; no user files were removed to make space.
+
+
+## Native user service — 2026-09-22
+
+Base `da3fad8` passed all three hosted OS jobs in workflow `35643857654`:
+77 Rust tests on Ubuntu/macOS and 68 on Windows, plus browser, delta, installer,
+packaging and all five APFS fault cases. The preceding folder recovery delivery
+is complete as a subsystem; the full product goal remains active.
+
+The new service layer validates the installer pointer/binary, owns its manager
+through a lifetime pipe, exposes authenticated process health, and preserves
+paused/enabled jobs across restart. Local native launchd acceptance exercised
+install/stop/start/restart, actual manager termination/recreation, retained-version
+update/rollback, foreign/symlinked registration rejection, uninstall and TLS
+payload hashes. Full OS login/reboot and elapsed soak remain untested.
+
+Observed fixes: Child::wait closes stored stdin, so the bootstrap retains its
+pipe independently while waiting. Current launchctl reports enabled/disabled
+words rather than booleans; status now accepts both formats and rejects unknown
+ones. A permission regression showed unreadable deployment state was reported as
+uninstalled; metadata errors now propagate instead of being treated as absence.
+The new Linux/Windows native adapters require exact-head Actions qualification;
+a local Mac pass is not cross-platform proof.

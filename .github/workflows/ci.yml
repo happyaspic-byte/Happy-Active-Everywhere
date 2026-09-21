@@ -53,6 +53,35 @@ jobs:
         if: ${{ !cancelled() }}
         shell: bash
         run: python scripts/verify-install.py --binary target/debug/everywhere${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: Prepare hosted Linux user service manager
+        if: ${{ success() && runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          if ! systemctl --user show-environment >/dev/null 2>&1; then
+            sudo loginctl enable-linger "$(id -un)"
+            sudo systemctl start "user@$(id -u).service"
+          fi
+          systemctl --user show-environment >/dev/null
+          printf 'XDG_RUNTIME_DIR=%s\nDBUS_SESSION_BUS_ADDRESS=%s\n' "$XDG_RUNTIME_DIR" "$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+      - name: Native user service acceptance
+        if: ${{ success() }}
+        shell: bash
+        run: python scripts/verify-service.py --binary target/debug/everywhere${{ runner.os == 'Windows' && '.exe' || '' }} --report folder-report/service-ci.json
+      - name: Upload service evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: service-evidence-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            folder-report/service-ci*.json
+            folder-report/service-evidence-*/**
+            folder-report/service-evidence/**/*.json
+            folder-report/service-evidence/**/*.log
+            folder-report/service-evidence/**/*.sqlite*
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Folder delta acceptance
         if: ${{ !cancelled() && runner.os == 'Linux' }}
         run: python scripts/bench_folder.py --binary target/debug/everywhere --mib 8 --files 20 --report folder-report/delta.json --require-delta

@@ -376,3 +376,28 @@ fn symlinked_service_manifest_never_changes_its_target() {
         assert_eq!(fs::read(outside).unwrap(), b"do not touch");
     });
 }
+
+#[cfg(unix)]
+#[test]
+fn unreadable_service_state_is_an_error_not_an_uninstalled_service() {
+    use std::os::unix::fs::PermissionsExt;
+    evidence(|base| {
+        let a = Node::new(base, "a");
+        let prefix = installed(base);
+        service::configure(&a.state, &prefix, address()).unwrap();
+        let directory = a.state.join("service");
+        let original = fs::metadata(&directory).unwrap().permissions();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o0)).unwrap();
+        let result = Command::new(binary())
+            .args(["service", "status", "--state", s(&a.state)])
+            .output();
+        fs::set_permissions(&directory, original).unwrap();
+        let result = result.unwrap();
+        assert!(
+            !result.status.success(),
+            "unreadable state was reported uninstalled: {}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        assert!(a.state.join("service/config.json").is_file());
+    });
+}

@@ -62,15 +62,15 @@ Files: create `src/service/native.rs`, `src/service/task.ps1`,
 Consumes: Task 1 manifest/bootstrap/health. Produces install/start/stop/restart/
 status/uninstall with native ownership validation and bounded command execution.
 
-- [ ] Add a real native acceptance script using a disposable prefix and two
+- [x] Add a real native acceptance script using a disposable prefix and two
   initialized peers. It executes install/status/stop/start/restart/uninstall,
   validates independently hashed bidirectional delivery after restart, and
   leaves foreign registration/data fixtures untouched. It always unregisters
   its owned service in `finally` and retains diagnostic logs on failure.
-- [ ] Run the script on the current Mac; expected RED: missing lifecycle
+- [x] Run the script on the current Mac; expected RED: missing lifecycle
   commands. Implement launchd, systemd and ScheduledTasks adapters with exact
   ownership checks, native escaping and explicit manager-unavailable errors.
-- [ ] Run the script again; expected GREEN on the current supported user session.
+- [x] Run the script again; expected GREEN on the current supported user session.
   Add bounded Linux/Windows CI setup only for disposable hosted runners.
   Missing native sessions must be reported and resolved, never silently skipped.
 
@@ -82,7 +82,7 @@ Files: update `docs/services.md`, `docs/install-update.md`, README,
 Consumes: both task interfaces. Produces packaged CLI, runnable operator
 instructions, failed-test artifacts, review corrections and exact-head CI proof.
 
-- [ ] Document lifecycle and update commands, retained bootstrap ownership,
+- [x] Document lifecycle and update commands, retained bootstrap ownership,
   login/session requirements, status meanings and physical-reboot limitations.
 - [ ] Run format, Clippy, all Rust tests, release compilation and native
   acceptance. Obtain one independent final review; reproduce important findings

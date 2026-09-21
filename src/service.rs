@@ -13,6 +13,98 @@ use std::{
     process::{Child, Command, Stdio},
     time::Duration,
 };
+mod native;
+
+#[derive(Clone, Copy)]
+pub enum Action {
+    Start,
+    Stop,
+    Restart,
+    Status,
+    Uninstall,
+}
+
+fn wait_ready(state: &Path, expected: bool) -> Result<()> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(25);
+    loop {
+        let status = local_status(state)?;
+        if (expected && status["healthy"] == true) || (!expected && status["runner_live"] == false)
+        {
+            return Ok(());
+        }
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "service did not reach the requested state; inspect {}",
+            state.join("service/output.log").display()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+fn verify_bootstrap(config: &Config) -> Result<()> {
+    let version = config
+        .bootstrap
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|v| v.to_str())
+        .context("invalid bootstrap version")?;
+    installed_binary(&config.prefix, version)?;
+    selected(&config.prefix)?;
+    Ok(())
+}
+fn report(config: &Config) -> Result<Value> {
+    let mut result = local_status(&config.state)?;
+    result["installed"] = json!(true);
+    result["native"] = native::status(config)?;
+    Ok(result)
+}
+pub fn install(state: &Path, prefix: &Path, listen: SocketAddr) -> Result<Value> {
+    let config = configure(state, prefix, listen)?;
+    let _lifecycle = lock(&config.state.join("service.lock"))?;
+    verify_bootstrap(&config)?;
+    native::install(&config)?;
+    native::start(&config)?;
+    wait_ready(&config.state, true)?;
+    report(&config)
+}
+pub fn control(state: &Path, action: Action) -> Result<Value> {
+    let state = state.canonicalize()?;
+    let _lifecycle = lock(&state.join("service.lock"))?;
+    if !exists(&state.join("service/config.json"))? {
+        ensure!(
+            matches!(action, Action::Status | Action::Uninstall),
+            "service is not installed"
+        );
+        return Ok(json!({"installed":false,"state":state}));
+    }
+    let config = load(&state)?;
+    match action {
+        Action::Start => {
+            verify_bootstrap(&config)?;
+            native::start(&config)?;
+            wait_ready(&state, true)?;
+        }
+        Action::Stop => {
+            native::stop(&config)?;
+            wait_ready(&state, false)?;
+        }
+        Action::Restart => {
+            verify_bootstrap(&config)?;
+            native::stop(&config)?;
+            wait_ready(&state, false)?;
+            native::start(&config)?;
+            wait_ready(&state, true)?;
+        }
+        Action::Uninstall => {
+            native::uninstall(&config)?;
+            wait_ready(&state, false)?;
+            fs::remove_file(state.join("service/config.json"))?;
+            sync_dir(&state.join("service"))?;
+            return Ok(json!({"installed":false,"state":state}));
+        }
+        Action::Status => {}
+    }
+    report(&config)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,6 +125,13 @@ fn regular(path: &Path) -> Result<()> {
     );
     Ok(())
 }
+fn exists(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
 fn directory(path: &Path) -> Result<()> {
     ensure!(
         fs::symlink_metadata(path)?.file_type().is_dir(),
@@ -49,7 +148,7 @@ fn sync_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 fn private_dir(path: &Path) -> Result<()> {
-    if path.symlink_metadata().is_ok() {
+    if exists(path)? {
         return directory(path);
     }
     let builder = fs::DirBuilder::new();
@@ -74,7 +173,7 @@ fn private_options() -> OpenOptions {
     options
 }
 fn lock(path: &Path) -> Result<File> {
-    if path.symlink_metadata().is_ok() {
+    if exists(path)? {
         regular(path)?;
     }
     let file = private_options().create(true).truncate(false).open(path)?;
@@ -97,7 +196,7 @@ fn text(path: &Path, limit: u64) -> Result<String> {
     Ok(String::from_utf8(read(path, limit)?)?)
 }
 fn publish(path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
-    if path.symlink_metadata().is_ok() {
+    if exists(path)? {
         regular(path)?;
     }
     let temporary = path.with_file_name(format!("service-{}.tmp", random_id()?));
@@ -267,7 +366,7 @@ pub fn configure(state: &Path, prefix: &Path, listen: SocketAddr) -> Result<Conf
     let _lifecycle = lock(&state.join("service.lock"))?;
     private_dir(&state.join("service"))?;
     let path = state.join("service/config.json");
-    if path.symlink_metadata().is_ok() {
+    if exists(&path)? {
         let existing = load(&state)?;
         // Upgrading the selected binary does not replace the retained bootstrap.
         ensure!(
@@ -293,11 +392,11 @@ impl Drop for ManagedChild {
 }
 fn logfile(state: &Path) -> Result<File> {
     let path = state.join("service/output.log");
-    if path.symlink_metadata().is_ok() {
+    if exists(&path)? {
         regular(&path)?;
         if fs::metadata(&path)?.len() > 1024 * 1024 {
             let previous = state.join("service/output.previous.log");
-            if previous.symlink_metadata().is_ok() {
+            if exists(&previous)? {
                 regular(&previous)?;
             }
             fs::rename(&path, previous)?;
@@ -346,7 +445,7 @@ pub fn run(state: &Path) -> Result<()> {
 }
 fn runner_live(state: &Path) -> Result<bool> {
     let path = state.join("service/run.lock");
-    if !path.try_exists()? {
+    if !exists(&path)? {
         return Ok(false);
     }
     regular(&path)?;
