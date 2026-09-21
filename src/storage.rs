@@ -126,25 +126,36 @@ struct InstallIntent {
     incoming: Manifest,
 }
 
-fn recovery_directory(parent: &Path) -> Result<PathBuf> {
-    let path = parent.join(".everywhere-recovery");
-    match fs::create_dir(&path) {
-        Ok(()) => {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
-            }
-            sync_dir(parent)?;
-        }
+fn private_directory(parent: &Path, name: &str) -> Result<PathBuf> {
+    let path = parent.join(name);
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(&path) {
+        Ok(()) => sync_dir(parent)?,
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
     }
     ensure!(
         fs::symlink_metadata(&path)?.file_type().is_dir(),
-        "unsafe recovery directory"
+        "unsafe private history directory"
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Also protect history directories created by older versions.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+        sync_dir(&path)?;
+    }
     Ok(path)
+}
+
+fn recovery_directory(parent: &Path) -> Result<PathBuf> {
+    private_directory(parent, ".everywhere-recovery")
 }
 
 // Record intent before moving the old directory entry. Preserve the actual file,
@@ -249,6 +260,7 @@ pub struct Receiver {
     part_path: PathBuf,
     part: File,
     _lock: File,
+    _alias_lock: File,
     manifest: Manifest,
     original: Option<Manifest>,
     finished: bool,
@@ -265,6 +277,24 @@ impl Receiver {
         regular(&target)?;
         let name = target.file_name().unwrap().as_encoded_bytes();
         let id = blake3::hash(name).to_hex().to_string();
+        // Let the filesystem resolve aliases instead of approximating its
+        // Unicode/case rules. Keep permanent entries and the legacy hash lock
+        // so outstanding journals keep their original names.
+        let lock_directory = private_directory(&parent, ".everywhere-locks")?;
+        let lock_name = match target.canonicalize() {
+            Ok(path) => path
+                .file_name()
+                .context("target must name a file")?
+                .to_owned(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                target.file_name().unwrap().to_owned()
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let alias_lock = open_rw(&lock_directory.join(lock_name))?;
+        alias_lock
+            .try_lock_exclusive()
+            .context("another receiver owns a destination alias")?;
         let lock = open_rw(&parent.join(format!(".everywhere-{id}.lock")))?;
         lock.try_lock_exclusive()
             .context("another receiver owns target")?;
@@ -311,6 +341,7 @@ impl Receiver {
             part_path,
             part,
             _lock: lock,
+            _alias_lock: alias_lock,
             manifest,
             original,
             finished: false,
@@ -391,15 +422,7 @@ impl Receiver {
         );
         let parent = self.target.parent().unwrap();
         if let Some(old) = &self.original {
-            let versions = parent.join(".everywhere-versions");
-            if versions.exists() {
-                ensure!(
-                    fs::symlink_metadata(&versions)?.file_type().is_dir(),
-                    "unsafe versions directory"
-                );
-            } else {
-                fs::create_dir(&versions)?;
-            }
+            let versions = private_directory(parent, ".everywhere-versions")?;
             let id = blake3::hash(self.target.file_name().unwrap().as_encoded_bytes()).to_hex();
             let version = versions.join(format!("{id}-{}", old.hash));
             if regular(&version)? && Manifest::from_path(&version)? != *old {
@@ -416,16 +439,26 @@ impl Receiver {
             }
             if !regular(&version)? {
                 let mut input = File::open(&self.target)?;
-                let mut output = OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .open(&version)?;
+                let mut options = OpenOptions::new();
+                options.create_new(true).write(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut output = options.open(&version)?;
                 std::io::copy(&mut input, &mut output)?;
                 output.sync_all()?;
                 ensure!(
                     Manifest::from_path(&version)? == *old,
                     "target changed while saving version"
                 );
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&version, fs::Permissions::from_mode(0o600))?;
+                File::open(&version)?.sync_all()?;
             }
             sync_dir(&versions)?;
             sync_dir(parent)?;
@@ -477,6 +510,30 @@ impl Receiver {
 
 pub fn restore(version: &Path, target: &Path) -> Result<()> {
     let manifest = Manifest::from_path(version)?;
+    let name = version.file_name().and_then(|name| name.to_str());
+    let expected = name
+        .and_then(|name| name.split_once('-'))
+        .filter(|(path_hash, content_hash)| valid_hash(path_hash) && valid_hash(content_hash))
+        .map(|(_, content_hash)| content_hash);
+    let archive_parent = version
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .canonicalize()?;
+    let in_archive = archive_parent
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(".everywhere-versions"));
+    ensure!(
+        !in_archive || expected.is_some(),
+        "unrecognized or quarantined archived version; automatic restore refused"
+    );
+    if let Some(expected) = expected {
+        ensure!(
+            manifest.hash == expected,
+            "archived version hash mismatch; current file preserved"
+        );
+    }
     let mut receiver = Receiver::open(target, manifest.clone())?;
     let mut source = File::open(version)?;
     let mut buffer = vec![0; BLOCK_SIZE];

@@ -11,6 +11,10 @@ Extract the ZIP. Its top-level directory contains `everywhere` (or
 The host architecture is recorded in the filename and `build.json`; do not
 assume an ARM package runs on x86 or on a Synology NAS.
 
+When building packages from source, `scripts/package.py` requires Python 3.11
+or newer (`tomllib`). This is a packaging-tool requirement; the installed
+Rust executable does not require Python.
+
 ## Linux and macOS
 
 ```sh

@@ -127,3 +127,38 @@ This is a preserved, downloadable alpha checkpoint, not a claim of physical
 NAS/WAN or long-duration qualification. Additional tests now target large
 metadata pages, coexistence with the older restoration journal and measured
 wire-byte reduction after editing one block of a large file.
+
+## File-safety follow-up — 2026-09-22
+
+Base `476aca1` was independently checked on the local Mac: 53 tests and
+Clippy passed, while formatting failed. Regression tests reproduced corrupt
+archive restoration, permissive archive modes, filename-alias lock bypasses,
+and a private folder destination becoming readable by other users.
+
+The fixes verify the saved archive hash before opening a receiver, reject
+quarantine copies through relative or aliased parent paths, create private
+Unix history/publication files, and use a filesystem-native filename lock
+namespace alongside the legacy receiver locks and journals. Independent review
+checked the corrections, including non-ASCII aliases missed by uppercase-only
+normalization. The existing scan implementation was formatted without behavior
+changes to address the latest CI format failure.
+
+Local verification of the resulting tree:
+
+- **64 Rust tests passed**, including 8 archive/alias tests and 15 folder tests.
+- Format check and Clippy with `-D warnings` passed; release compilation passed.
+- The actual release binary passed installation, upgrade, rollback, launcher,
+  and corrupt-package rejection checks; macOS ARM64 ZIP packaging passed with
+  Python 3.11 (the macOS system Python 3.9 lacks `tomllib`).
+- An 8 MiB file plus 20 small files passed real TLS synchronization through a
+  counting relay. Initial client-to-server traffic was 8,416,085 bytes, a
+  one-block edit used 1,052,771 bytes, and an unchanged exchange used 1,461
+  bytes. Independent SHA-256 mismatches and missing files were both zero.
+- Two real-process tests inject a SQLite failure after file publication, kill
+  the receiver, and reconnect. They verify exact causal-head preservation or
+  preservation of a local edit made before restart. Failure evidence is kept.
+
+These are same-host results, not physical-device or WAN measurements.
+[Safety details and commands](safety-hardening.md) describe the test boundary,
+upgrade requirements, and remaining filesystem/ACL limitations. The 100 GiB
+test remains deferred; no user files were removed to make space.

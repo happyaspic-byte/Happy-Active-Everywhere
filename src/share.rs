@@ -444,8 +444,16 @@ impl Share {
         self.connection.execute_batch("CREATE TEMP TABLE IF NOT EXISTS scan_seen(path TEXT PRIMARY KEY,alias TEXT UNIQUE NOT NULL,content TEXT NOT NULL); DELETE FROM scan_seen;")?;
         let transaction = self.connection.unchecked_transaction()?;
         self.root.visit(&mut |path, is_dir| {
-            let content = if is_dir { Content::Directory } else { self.capture(path)? };
-            self.connection.execute("INSERT INTO scan_seen VALUES(?1,?2,?3)", params![path, collision_key(path), serde_json::to_string(&content)?])
+            let content = if is_dir {
+                Content::Directory
+            } else {
+                self.capture(path)?
+            };
+            self.connection
+                .execute(
+                    "INSERT INTO scan_seen VALUES(?1,?2,?3)",
+                    params![path, collision_key(path), serde_json::to_string(&content)?],
+                )
                 .context("cannot record scanned path; check case/Unicode aliases and free space")?;
             Ok(())
         })?;
@@ -454,86 +462,96 @@ impl Share {
         let mut after = String::new();
         loop {
             let page: Vec<(String, String)> = {
-                let mut statement = self.connection.prepare("SELECT path,content FROM scan_seen WHERE path>?1 ORDER BY path LIMIT 256")?;
-                statement.query_map([&after], |r| Ok((r.get(0)?,r.get(1)?)))?.collect::<std::result::Result<_,_>>()?
+                let mut statement = self.connection.prepare(
+                    "SELECT path,content FROM scan_seen WHERE path>?1 ORDER BY path LIMIT 256",
+                )?;
+                statement
+                    .query_map([&after], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<std::result::Result<_, _>>()?
             };
-            if page.is_empty() { break; }
+            if page.is_empty() {
+                break;
+            }
             for (path, json) in &page {
                 after = path.clone();
                 let parsed: Content = serde_json::from_str(json)?;
                 let content = &parsed;
-            let old = self.local(path)?;
-            self.connection
-                .execute("DELETE FROM pending WHERE path=?1", [path])?;
-            if let Some(previous) = &old {
-                if previous.record.versions != previous.observed
-                    && previous
-                        .record
-                        .versions
-                        .selected()
-                        .is_some_and(|r| &r.content == content)
-                {
-                    // The filesystem publication completed before the index
-                    // acknowledgement. Adopt it without inventing a local edit.
-                    self.save(
-                        path,
-                        &previous.record.versions,
-                        Some(content),
-                        &previous.record.versions,
-                    )?;
+                let old = self.local(path)?;
+                self.connection
+                    .execute("DELETE FROM pending WHERE path=?1", [path])?;
+                if let Some(previous) = &old {
+                    if previous.record.versions != previous.observed
+                        && previous
+                            .record
+                            .versions
+                            .selected()
+                            .is_some_and(|r| &r.content == content)
+                    {
+                        // The filesystem publication completed before the index
+                        // acknowledgement. Adopt it without inventing a local edit.
+                        self.save(
+                            path,
+                            &previous.record.versions,
+                            Some(content),
+                            &previous.record.versions,
+                        )?;
+                        continue;
+                    }
+                }
+                if old.as_ref().and_then(|l| l.materialized.as_ref()) == Some(content) {
                     continue;
                 }
+                let observed = old.as_ref().map(|l| l.observed.clone()).unwrap_or_default();
+                let local = observed.edit(&self.replica(), content.clone())?;
+                let combined = old
+                    .as_ref()
+                    .map(|l| l.record.versions.join(&local))
+                    .transpose()?
+                    .unwrap_or_else(|| local.clone());
+                self.save(path, &combined, Some(content), &local)?;
+                report.changed += 1;
             }
-            if old.as_ref().and_then(|l| l.materialized.as_ref()) == Some(content) {
-                continue;
-            }
-            let observed = old.as_ref().map(|l| l.observed.clone()).unwrap_or_default();
-            let local = observed.edit(&self.replica(), content.clone())?;
-            let combined = old
-                .as_ref()
-                .map(|l| l.record.versions.join(&local))
-                .transpose()?
-                .unwrap_or_else(|| local.clone());
-            self.save(path, &combined, Some(content), &local)?;
-            report.changed += 1;
-        }
         }
         let mut after = String::new();
         loop {
             let page: Vec<String> = {
                 let mut statement = self.connection.prepare("SELECT e.path FROM entries e LEFT JOIN scan_seen s ON s.path=e.path WHERE s.path IS NULL AND e.path>?1 ORDER BY e.path LIMIT 256")?;
-                statement.query_map([&after], |r| r.get(0))?.collect::<std::result::Result<_,_>>()?
+                statement
+                    .query_map([&after], |r| r.get(0))?
+                    .collect::<std::result::Result<_, _>>()?
             };
-            if page.is_empty() { break; }
+            if page.is_empty() {
+                break;
+            }
             for path in page {
                 after = path.clone();
-            let old = self.local(&path)?.unwrap();
-            if old.record.versions != old.observed
-                && old
-                    .record
-                    .versions
-                    .selected()
-                    .is_some_and(|r| r.content == Content::Deleted)
-            {
-                self.save(&path, &old.record.versions, None, &old.record.versions)?;
-                self.connection
-                    .execute("DELETE FROM pending WHERE path=?1", [&path])?;
-                continue;
+                let old = self.local(&path)?.unwrap();
+                if old.record.versions != old.observed
+                    && old
+                        .record
+                        .versions
+                        .selected()
+                        .is_some_and(|r| r.content == Content::Deleted)
+                {
+                    self.save(&path, &old.record.versions, None, &old.record.versions)?;
+                    self.connection
+                        .execute("DELETE FROM pending WHERE path=?1", [&path])?;
+                    continue;
+                }
+                if old.materialized.is_none() {
+                    continue;
+                }
+                if approve_deletes {
+                    let deleted = old.observed.edit(&self.replica(), Content::Deleted)?;
+                    self.save(&path, &old.record.versions.join(&deleted)?, None, &deleted)?;
+                    self.connection
+                        .execute("DELETE FROM pending WHERE path=?1", [&path])?;
+                    report.changed += 1;
+                } else {
+                    self.connection
+                        .execute("INSERT OR IGNORE INTO pending VALUES(?1)", [&path])?;
+                }
             }
-            if old.materialized.is_none() {
-                continue;
-            }
-            if approve_deletes {
-                let deleted = old.observed.edit(&self.replica(), Content::Deleted)?;
-                self.save(&path, &old.record.versions.join(&deleted)?, None, &deleted)?;
-                self.connection
-                    .execute("DELETE FROM pending WHERE path=?1", [&path])?;
-                report.changed += 1;
-            } else {
-                self.connection
-                    .execute("INSERT OR IGNORE INTO pending VALUES(?1)", [&path])?;
-            }
-        }
         }
         report.pending_deletions = usize::try_from(self.connection.query_row(
             "SELECT count(*) FROM pending",
@@ -642,13 +660,17 @@ impl Share {
         loop {
             let paths: Vec<String> = {
                 let mut statement = self.connection.prepare("WITH candidates AS (SELECT e.path, NOT EXISTS(SELECT 1 FROM json_each(e.versions,'$.heads') h WHERE json_extract(h.value,'$.content.kind')!='deleted') AS removing, length(e.path)-length(replace(e.path,'/','')) AS depth FROM entries e WHERE e.versions!=e.observed AND NOT EXISTS(SELECT 1 FROM pending p WHERE p.path=e.path)) SELECT path FROM candidates ORDER BY removing, CASE WHEN removing THEN -depth ELSE depth END, path LIMIT 256")?;
-                statement.query_map([], |r| r.get(0))?.collect::<std::result::Result<_,_>>()?
+                statement
+                    .query_map([], |r| r.get(0))?
+                    .collect::<std::result::Result<_, _>>()?
             };
-            if paths.is_empty() { break; }
+            if paths.is_empty() {
+                break;
+            }
             for path in paths {
                 let local = self.local(&path)?.unwrap();
-            self.authorize(peer, true)?;
-            self.apply_local(&path, &local)?;
+                self.authorize(peer, true)?;
+                self.apply_local(&path, &local)?;
             }
         }
         Ok(())
@@ -819,7 +841,8 @@ impl Share {
     pub fn conflicts(&self) -> Result<serde_json::Value> {
         let mut conflicts = Vec::new();
         let mut statement = self.connection.prepare("SELECT path,versions FROM entries WHERE json_array_length(versions,'$.heads')>1 ORDER BY path")?;
-        let rows = statement.query_map([], |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?)))?;
+        let rows =
+            statement.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
         for row in rows {
             let (path, json) = row?;
             let versions: Versions = serde_json::from_str(&json)?;

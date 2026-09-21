@@ -492,3 +492,182 @@ fn folder_scans_remain_usable_after_legacy_file_restoration() {
         b"restored through old CLI"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn remote_replacement_keeps_private_destination_and_recovery_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let (a, b) = pair(tmp.path());
+    fs::write(a.root.join("private"), b"initial").unwrap();
+    sync(&a, &b);
+    fs::set_permissions(b.root.join("private"), fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(a.root.join("private"), b"remote edit").unwrap();
+    sync(&a, &b);
+    assert_eq!(fs::read(b.root.join("private")).unwrap(), b"remote edit");
+    assert_eq!(
+        fs::metadata(b.root.join("private"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(b.root.join(".everywhere-recovery"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+}
+
+fn restart_after_publication_database_failure(local_edit: bool) {
+    // Inject an actual SQLite write failure, not a fake filesystem or network.
+    // The persistent server is then killed with the new bytes on disk but the
+    // old materialization in SQLite, exactly the recovery gap under test.
+    let tmp = TempDir::new().unwrap();
+    let result = std::panic::catch_unwind(|| {
+        let (a, b) = pair(tmp.path());
+        fs::write(a.root.join("note"), b"initial").unwrap();
+        sync(&a, &b);
+        let db_path = b.state.join("shares/personal/index.sqlite");
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        let before: String = db
+            .query_row(
+                "SELECT materialized FROM entries WHERE path='note'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        db.execute_batch(
+            "CREATE TRIGGER test_fail_materialization BEFORE UPDATE OF materialized ON entries
+             WHEN NEW.path='note' AND NEW.materialized!=OLD.materialized
+             BEGIN SELECT RAISE(ABORT,'injected publication database failure'); END;",
+        )
+        .unwrap();
+        drop(db);
+        fs::write(a.root.join("note"), b"remote revision").unwrap();
+
+        let mut child = Command::new(env!("CARGO_BIN_EXE_everywhere"))
+            .args([
+                "sync-serve",
+                "--state",
+                s(&b.state),
+                "--folder",
+                "personal",
+                "--peer",
+                &a.id,
+                "--listen",
+                "127.0.0.1:0",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(fs::File::create(tmp.path().join("receiver.log")).unwrap())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut server = Server(child);
+        let (tx, rx) = mpsc::channel();
+        let startup = thread::spawn(move || {
+            let mut stdout = BufReader::new(stdout);
+            let mut line = String::new();
+            stdout.read_line(&mut line).unwrap();
+            let _ = tx.send(line);
+            stdout
+        });
+        let line = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let _stdout = startup.join().unwrap();
+        let address = line.trim().strip_prefix("LISTEN ").unwrap();
+        let failed = run(&[
+            "sync",
+            "--state",
+            s(&a.state),
+            "--folder",
+            "personal",
+            "--peer",
+            &b.id,
+            "--addr",
+            address,
+        ]);
+        fs::write(tmp.path().join("sender.log"), &failed.stderr).unwrap();
+        assert!(!failed.status.success());
+        let sent_revision = head_state(&a, "note");
+        assert_eq!(
+            sha(&fs::read(b.root.join("note")).unwrap()),
+            sha(b"remote revision")
+        );
+        let db = rusqlite::Connection::open(&db_path).unwrap();
+        let materialized: String = db
+            .query_row(
+                "SELECT materialized FROM entries WHERE path='note'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            materialized, before,
+            "fault did not hit the publication/DB gap"
+        );
+        assert!(server.0.try_wait().unwrap().is_none());
+        server.0.kill().unwrap();
+        server.0.wait().unwrap();
+        db.execute_batch("DROP TRIGGER test_fail_materialization")
+            .unwrap();
+        drop(db);
+
+        if local_edit {
+            fs::write(b.root.join("note"), b"local edit after crash").unwrap();
+        }
+        sync(&a, &b);
+        let settled = head_state(&a, "note");
+        assert_eq!(head_state(&b, "note"), settled);
+        if local_edit {
+            for node in [&a, &b] {
+                let conflicts: Value =
+                    serde_json::from_str(&node.command("share-conflicts", &[])).unwrap();
+                let mut actual: Vec<_> = conflicts[0]["revisions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|r| sha(&fs::read(r["object_path"].as_str().unwrap()).unwrap()))
+                    .collect();
+                let mut expected = vec![sha(b"remote revision"), sha(b"local edit after crash")];
+                actual.sort();
+                expected.sort();
+                assert_eq!(actual, expected);
+            }
+        } else {
+            assert_eq!(
+                settled, sent_revision,
+                "restart invented another causal revision"
+            );
+            assert_eq!(settled["heads"].as_array().unwrap().len(), 1);
+            assert_eq!(
+                sha(&fs::read(b.root.join("note")).unwrap()),
+                sha(b"remote revision")
+            );
+        }
+        sync(&b, &a);
+        assert_eq!(head_state(&a, "note"), settled);
+        assert_eq!(head_state(&b, "note"), settled);
+    });
+    if let Err(error) = result {
+        let evidence = tmp.keep();
+        eprintln!(
+            "Recovery failure evidence (device DBs, objects, journals, logs): {}",
+            evidence.display()
+        );
+        std::panic::resume_unwind(error);
+    }
+}
+
+#[test]
+fn killed_receiver_adopts_published_file_without_inventing_a_local_edit() {
+    restart_after_publication_database_failure(false);
+}
+
+#[test]
+fn killed_receiver_preserves_a_local_edit_made_before_restarting() {
+    restart_after_publication_database_failure(true);
+}

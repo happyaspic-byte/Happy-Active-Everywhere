@@ -35,6 +35,7 @@ everywhere manage --state /path/to/device-state --listen 127.0.0.1:7445
 
 기능 시험 통과와 완제품 인증을 구분합니다. 최신 커밋의 서식·Clippy·전체 시험·브라우저·release 빌드가 모두 통과하기 전에는 배포 후보로 사용하지 않습니다.
 [작업 및 검증 기록](docs/product-work.md)에서 실패한 회귀 시험과 수정 결과를 확인할 수 있습니다.
+[파일 안전성 보강 기록](docs/safety-hardening.md)은 손상된 보존본, 파일 권한, 파일명 별칭 잠금과 파일 반영 후 DB 기록 실패 시 재시작 검증을 설명합니다.
 [폴더 설계](docs/folder-sync-design.md), [관리 설계](docs/management-design.md),
 [기존 전송 알파 운영](docs/alpha-operations.md), [초기 실측](docs/verification.md)도 참고하세요.
 초기 단일 파일·인덱싱 실측은 새 폴더 동기화 성능을 입증하지 않습니다.

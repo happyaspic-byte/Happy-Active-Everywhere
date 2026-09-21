@@ -57,7 +57,14 @@ fn read_content(dir: &Dir, path: &Path) -> Result<Option<Content>> {
     )))
 }
 fn new_file(dir: &Dir, path: &Path) -> Result<cap_std::fs::File> {
-    Ok(dir.open_with(path, OpenOptions::new().write(true).create_new(true))?)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    Ok(dir.open_with(path, &options)?)
 }
 fn finish_record(transaction: &Dir) -> Result<()> {
     let done = new_file(transaction, Path::new("done"))?;
@@ -100,7 +107,11 @@ impl Root {
     pub fn visit(&self, visit: &mut impl FnMut(&str, bool) -> Result<()>) -> Result<()> {
         self.walk(Path::new(""), visit)
     }
-    fn walk(&self, relative: &Path, visit: &mut impl FnMut(&str, bool) -> Result<()>) -> Result<()> {
+    fn walk(
+        &self,
+        relative: &Path,
+        visit: &mut impl FnMut(&str, bool) -> Result<()>,
+    ) -> Result<()> {
         let directory = if relative.as_os_str().is_empty() {
             self.dir.try_clone()?
         } else {
@@ -186,7 +197,14 @@ impl Root {
             self.sync_parent(Path::new(path))?;
             return Ok(());
         }
-        match self.dir.create_dir(".everywhere-recovery") {
+        let mut builder = cap_std::fs::DirBuilder::new();
+        builder.recursive(false);
+        #[cfg(unix)]
+        {
+            use cap_std::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match self.dir.create_dir_with(".everywhere-recovery", &builder) {
             Ok(()) => sync(&self.dir)?,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(e.into()),
@@ -199,6 +217,12 @@ impl Root {
             "unsafe recovery directory"
         );
         let recovery = self.dir.open_dir(".everywhere-recovery")?;
+        #[cfg(unix)]
+        {
+            use cap_std::fs::PermissionsExt;
+            recovery.set_permissions(".", cap_std::fs::Permissions::from_mode(0o700))?;
+            sync(&recovery)?;
+        }
         let id = random_id()?;
         recovery.create_dir(&id)?;
         let transaction = recovery.open_dir(&id)?;
