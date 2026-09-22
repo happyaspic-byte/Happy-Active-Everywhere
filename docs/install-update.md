@@ -1,7 +1,10 @@
-# Install, update and roll back a verified build
+# Install, update and roll back a build
 
 Download the OS/architecture package from an **all-green** workflow run on the
-work branch. Artifacts currently expire after 14 days. They are alpha packages,
+work branch. The current workflow compiles, lints and packages only; green is
+not a functional acceptance result for central management. Follow
+[central management](central-management.md) for the web setup. Artifacts
+currently expire after 14 days. They are alpha packages,
 not signed stable releases. Compare the ZIP's SHA-256 with its `.sha256` sidecar
 before extraction. A same-source checksum is integrity checking, not an
 independent publisher signature.

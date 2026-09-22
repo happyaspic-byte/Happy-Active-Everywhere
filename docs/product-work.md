@@ -6,6 +6,30 @@ existing sync-engine controls. CI compiles, lints and packages the three OS
 binaries; it no longer runs acceptance, soak, volume-fault or benchmark suites.
 Historical results below do not certify the new central-management code.
 
+## Central management implementation
+
+The new `central` and `enroll` commands connect an embedded Korean fleet console
+to outward-connecting managed agents. The console creates expiring one-device
+invitations, approves certificate fingerprints, distributes folder pairs and
+observes durable command results. Pause/resume, deletion approval, conflict
+selection, history restoration and folder access withdrawal reuse the existing
+engine. Native service configuration selects the server or agent role from its
+state directory. See [central usage](central-management.md).
+
+One independent static review found four Important issues: identity enrollment
+needed private-key possession proof, revoked devices could not report completed
+commands, job deployment had a concurrent-binding race, and a large catalog
+could block the command channel. All four were addressed: client TLS signatures
+and request identity binding, result collection without new dispatch after
+revocation, one-mutex configuration persistence, and explicitly truncated status
+reports that preserve control traffic. Configuration publication is also atomic
+and never replaces an existing enrollment.
+
+Observed local checks: Rust formatting, Clippy across all targets with warnings
+denied, JavaScript syntax checks, and release compilation. No central functional,
+browser, multi-process or physical-device acceptance was run. Build/package CI
+results are reported separately; there is no claim of production qualification.
+
 # Product implementation ledger
 
 Base: `6235caf7818007fccd1eef79174d89982f9d9aa6`.

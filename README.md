@@ -1,24 +1,34 @@
 # Happy-Active-Everywhere — 개인용 P2P 동기화 개발 프로젝트
 
-현재 결과물: **양방향 폴더 동기화와 로컬 관리 화면을 갖춘 개발용 알파**.
-GitHub Actions에서 Windows·macOS·Ubuntu를 시험합니다. 실장비·NAS·실제 WAN·장시간 안정성 검증과 배포 작업은 진행 중입니다.
+현재 결과물: **양방향 동기화 엔진과 중앙 웹 관리 콘솔을 갖춘 개발용 알파**.
+중앙 웹에서 여러 장치 등록·승인, 폴더 연결, 작업 제어와 변경 검토를 수행합니다.
+GitHub Actions는 Windows·macOS·Ubuntu의 빌드·정적 검사·패키징을 수행합니다.
+사용자 요청에 따라 기능·장시간·대용량·비교 시험은 자동 실행하지 않으며 실제 사용 시험은 사용자가 수행합니다.
 Resilio Active Everywhere는 참고 기준이며, 프로토콜 호환성이나 성능 동등성을 주장하지 않습니다.
 
 [장치 전체 암호화 백업·복구](docs/device-backup.md)를 통해 새 폴더에 파일·이전 버전·삭제 대기 기록을 복구할 수 있습니다. 복구 직후에는 권한과 자동 작업을 비활성화하며, peer와 최신 상태를 재조정한 뒤 원래 동기화 모드를 활성화합니다.
 
 ## 시작하기
 
-[폴더 동기화 안내](docs/folder-quickstart.md)에 따라 장치 초기화, 인증서 교환,
-폴더 승인, 수신과 연결을 설정하세요. 상태 디렉터리는 동기화 폴더 밖에 둡니다.
+[중앙 웹 관리 안내](docs/central-management.md)로 시작하세요.
 
 ```sh
-everywhere management-token --state /path/to/device-state
-everywhere manage --state /path/to/device-state --listen 127.0.0.1:7445
+everywhere central --state /absolute/path/central-state
+# 다른 터미널에서 로그인 토큰 확인
+everywhere management-token --state /absolute/path/central-state
 ```
 
-브라우저에서 `http://127.0.0.1:7445`에 접속해 표시한 관리 토큰으로 로그인합니다.
-이 화면은 해당 컴퓨터만 관리하며 기본적으로 외부 네트워크에 노출하지 않습니다.
-토큰은 URL이나 HTML에 포함되지 않습니다. 기기의 개인키는 다른 장비에 복사하지 않습니다.
+브라우저에서 **http://127.0.0.1:7446**에 접속해 로그인합니다. 웹에서 장치를 초대하고,
+각 장치에서 한 번 등록한 뒤 중앙에서 폴더를 연결합니다.
+
+```sh
+everywhere enroll --state /absolute/path/device-state --invitation everywhere-invitation.json --name "내 장치"
+everywhere manage --state /absolute/path/device-state
+```
+
+중앙 서버와 장치 상태는 분리하고 동기화 폴더 밖에 둡니다. 백그라운드 자동 실행은
+[서비스 안내](docs/services.md), 패키지 설치는 [설치 안내](docs/install-update.md)를 참고하세요.
+기존 [로컬 관리 화면과 CLI 설정](docs/folder-quickstart.md)도 계속 사용할 수 있습니다.
 
 ## 구현 상태
 
@@ -32,26 +42,26 @@ everywhere manage --state /path/to/device-state --listen 127.0.0.1:7445
 | 충돌 선택·로컬 이전 버전 복원·복원 내용 재전파 | 구현·실제 TLS 시험 |
 | 폴더 상태 백업·손상된 인덱스 복구·peer 전체 재조정 | 구현·CLI/TLS 및 중단 경계 시험 |
 | 로컬 관리 화면·토큰 인증·개별 삭제 검토·복구 | 구현·HTTP 및 실제 브라우저 시험 |
-| 백그라운드 작업·설치·업데이트·롤백 | 개발 중 |
-| 중앙 다중 사용자 관리·릴레이·NAT 자동 연결 | 제공하지 않음 |
+| 백그라운드 작업·설치·업데이트·롤백 | 구현·이전 세 OS 시험 기록 |
+| 중앙 웹·장치 초대·폴더 배포·명령 기록 | 구현·빌드/정적 검사 대상, 기능 시험은 사용자 수행 |
+| 중앙 다중 사용자·릴레이·NAT 자동 연결 | 제공하지 않음 |
 | 이벤트 감시·대량 폴더 최적화·NAS·실제 LAN/WAN·장시간 시험 | 미완료 |
 
-기능 시험 통과와 완제품 인증을 구분합니다. 최신 커밋의 서식·Clippy·전체 시험·브라우저·release 빌드가 모두 통과하기 전에는 배포 후보로 사용하지 않습니다.
+위 시험 표기는 이전 동기화 엔진의 검증 기록입니다. 새 중앙 관리 기능의 실제 동작 검증을 의미하지 않습니다. 최신 CI는 빌드·정적 검사·패키징만 수행합니다.
 [작업 및 검증 기록](docs/product-work.md)에서 실패한 회귀 시험과 수정 결과를 확인할 수 있습니다.
 [파일 안전성 보강 기록](docs/safety-hardening.md)은 손상된 보존본, 파일 권한, 파일명 별칭 잠금과 파일 반영 후 DB 기록 실패 시 재시작 검증을 설명합니다.
 [볼륨 장애 시험](docs/volume-faults.md)은 격리된 APFS 이미지의 실제 공간 부족·분리·읽기 전용 오류와 복구를 재현합니다.
 [파일시스템·NAS 검증](docs/storage-qualification.md)은 등록 전 안전성 검사와 실제 SMB 마운트에서 확인한 미지원 원인을 설명합니다. 해당 SMB 환경의 동기화는 아직 지원하지 않습니다.
-[지속 동기화 시험](docs/managed-soak.md)은 독립 관리 프로세스 3개의 충돌·삭제·재시작 재현과 실제 72시간 관측 절차를 설명합니다.
+[지속 동기화 시험](docs/managed-soak.md)은 사용자가 필요할 때 실행할 수 있도록 보존한 절차입니다. 장시간 시험은 자동 실행하지 않습니다.
 [상태 백업·복구 안내](docs/state-backup.md)는 체크포인트 생성, 인덱스 복구와 재접속 절차를 설명합니다.
 [폴더 설계](docs/folder-sync-design.md), [관리 설계](docs/management-design.md),
 [기존 전송 알파 운영](docs/alpha-operations.md), [초기 실측](docs/verification.md)도 참고하세요.
 초기 단일 파일·인덱싱 실측은 새 폴더 동기화 성능을 입증하지 않습니다.
 
-## 빌드·시험
+## 빌드·정적 검사
 
 ```sh
 cargo build --release --locked
-cargo test --locked --all-targets -- --nocapture
 cargo clippy --locked --all-targets -- -D warnings
 ```
 

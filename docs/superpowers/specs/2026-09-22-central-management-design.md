@@ -20,7 +20,9 @@ conflict resolution and history restore use existing engine operations.
 - Rust/Axum server with a private SQLite registry and command queue. Embedded
   static assets; no Node runtime or third-party web resources.
 - Separate outbound agent control connection using TLS 1.3, a pinned server
-  certificate and a per-device random credential. Invitations are single-use,
+  certificate and a per-device random credential. Client TLS proves possession
+  of the enrolled device's private key; the application binds every request to
+  that handshake identity. Invitations are single-use,
   expiring and never placed in URLs. Pending/revoked agents cannot fetch work.
 - Browser API uses the existing private bearer login, exact Host/Origin checks
   and CSP. Default listener is loopback. Remote browser access uses an SSH tunnel

@@ -1,5 +1,10 @@
 # Local management and deployment contract
 
+For central fleet management, see [central management](central-management.md).
+A state with `central-server.json` serves the central console through `manage`;
+a state with `central-agent.json` runs the outbound control worker alongside
+local management. The contract below describes ordinary local agent management.
+
 The embedded management server controls the local device. It is not an
 internet-exposed central multi-user service. Folder transport remains mutual
 TLS between explicitly approved peers.
@@ -27,6 +32,9 @@ TLS between explicitly approved peers.
   together with content/history before a destructive migration. This branch
   uses additive tables and refuses identity/epoch corruption.
 
-Acceptance tests must exercise real HTTP authentication, origin rejection,
+Historical acceptance tests exercise real HTTP authentication, origin rejection,
 folder creation and state changes, as well as CLI recovery and real TLS peer
 sessions. A screenshot alone is not functional verification.
+
+The owner now performs acceptance testing. Automatic CI is build/package only;
+central functionality is not covered by the historical browser acceptance.

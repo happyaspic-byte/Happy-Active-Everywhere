@@ -160,7 +160,40 @@ impl Jobs {
         File::open(&self.state)?.sync_all()?;
         Ok(())
     }
+    pub(crate) fn validate_deployment(&self, config: &Config) -> Result<()> {
+        config.validate()?;
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("job supervisor unavailable"))?;
+        Self::check_deployment(&inner, config)
+    }
+    fn check_deployment(inner: &Inner, config: &Config) -> Result<()> {
+        if let Some(existing) = inner.configs.get(&config.id) {
+            let mut expected = config.clone();
+            expected.enabled = existing.enabled;
+            ensure!(
+                serde_json::to_value(existing)? == serde_json::to_value(expected)?,
+                "existing job has a different binding; choose a new job ID"
+            );
+        }
+        if matches!(config.direction, Direction::Listen) {
+            ensure!(
+                !inner.configs.values().any(|other| other.id != config.id
+                    && matches!(other.direction, Direction::Listen)
+                    && other.address.port() == config.address.port()),
+                "another listening job already uses this port"
+            );
+        }
+        Ok(())
+    }
+    pub(crate) fn save_deployment(&self, config: Config) -> Result<()> {
+        self.save_inner(config, true)
+    }
     pub fn save(&self, config: Config) -> Result<()> {
+        self.save_inner(config, false)
+    }
+    fn save_inner(&self, config: Config, deployment: bool) -> Result<()> {
         config.validate()?;
         identity::Identity::new(&self.state, &config.peer)?;
         share::check_access(&self.state, &config.folder, &config.peer, false)?;
@@ -168,6 +201,12 @@ impl Jobs {
             .inner
             .lock()
             .map_err(|_| anyhow::anyhow!("job supervisor unavailable"))?;
+        if deployment {
+            Self::check_deployment(&inner, &config)?;
+            if inner.configs.contains_key(&config.id) {
+                return Ok(());
+            }
+        }
         let mut configs = inner.configs.clone();
         configs.insert(config.id.clone(), config.clone());
         ensure!(configs.len() <= 32, "too many managed jobs");

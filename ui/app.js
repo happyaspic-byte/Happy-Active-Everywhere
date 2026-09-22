@@ -39,6 +39,11 @@ async function revisions(folder, path, items, historical) {
 }
 async function refresh() {
   const data = await api('/api/status');
+  const central = data.central || {state:'not-enrolled'};
+  $('central-panel').hidden = central.state === 'not-enrolled';
+  const centralLabels = {approved:'중앙 관리 승인됨',pending:'중앙 웹에서 승인 대기',revoked:'중앙 관리 해제됨',disconnected:'중앙 서버 연결 끊김',error:'중앙 에이전트 오류'};
+  $('central-status').textContent = `${centralLabels[central.state] || central.state}${central.address ? ` · ${central.address}` : ''}${central.last_contact ? ` · 마지막 접속 ${new Date(central.last_contact*1000).toLocaleString()}` : ''}`;
+  $('central-error').textContent = central.error || '';
   $('identity').textContent = data.identity;
   $('version').textContent = data.version;
   $('folder-list').replaceChildren();

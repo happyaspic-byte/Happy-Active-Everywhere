@@ -67,6 +67,27 @@ enum Command {
         #[command(subcommand)]
         action: ServiceCommand,
     },
+    /// Configure and run the central fleet console (separate server state).
+    Central {
+        #[arg(long)]
+        state: PathBuf,
+        #[arg(long, default_value = "127.0.0.1:7446")]
+        listen: SocketAddr,
+        #[arg(long, default_value = "0.0.0.0:7447")]
+        control_listen: SocketAddr,
+        /// HTTPS origin of a trusted reverse proxy forwarding to this loopback listener.
+        #[arg(long)]
+        public_origin: Option<String>,
+    },
+    /// Import a central invitation once; preserve this device's existing identity.
+    Enroll {
+        #[arg(long)]
+        state: PathBuf,
+        #[arg(long)]
+        invitation: PathBuf,
+        #[arg(long)]
+        name: String,
+    },
     /// Serve the private, local management dashboard.
     Manage {
         #[arg(long, hide = true)]
@@ -344,6 +365,25 @@ async fn main() -> Result<()> {
                 _ => unreachable!(),
             };
             println!("{}", everywhere::service::control(&args.state, operation)?);
+        }
+        Command::Central {
+            state,
+            listen,
+            control_listen,
+            public_origin,
+        } => {
+            everywhere::central::configure(&state, control_listen, public_origin)?;
+            everywhere::management::serve(&state, listen).await?;
+        }
+        Command::Enroll {
+            state,
+            invitation,
+            name,
+        } => {
+            println!(
+                "{}",
+                everywhere::central::enroll(&state, &invitation, &name).await?
+            );
         }
         Command::Manage {
             state,

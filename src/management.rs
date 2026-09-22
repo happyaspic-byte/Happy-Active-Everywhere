@@ -16,14 +16,14 @@ use axum::{
     routing::{get, post},
 };
 use fs2::FileExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 pub fn token(state: &Path) -> Result<String> {
@@ -63,11 +63,12 @@ struct App {
     token: String,
     host: String,
     jobs: Arc<crate::jobs::Jobs>,
+    central: Arc<Mutex<Value>>,
 }
 async fn health(State(app): State<Arc<App>>) -> Json<Value> {
     Json(json!({"status":"ok", "device":app.device,"pid":std::process::id()}))
 }
-fn equal_secret(left: &str, right: &str) -> bool {
+pub(crate) fn equal_secret(left: &str, right: &str) -> bool {
     left.len() == right.len()
         && left
             .bytes()
@@ -132,6 +133,11 @@ async fn status(State(app): State<Arc<App>>) -> Response {
         match tokio::task::spawn_blocking(move || -> Result<Value> {
             let mut status = share::catalog(&app.state)?;
             status["jobs"] = app.jobs.status()?;
+            status["central"] = app
+                .central
+                .lock()
+                .map_err(|_| anyhow::anyhow!("agent status unavailable"))?
+                .clone();
             Ok(status)
         })
         .await
@@ -141,9 +147,15 @@ async fn status(State(app): State<Arc<App>>) -> Response {
         },
     )
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
-enum Operation {
+pub(crate) enum Operation {
+    Deploy {
+        root: PathBuf,
+        mode: Mode,
+        certificate: Vec<u8>,
+        job: crate::jobs::Config,
+    },
     TrustPeer {
         certificate: Vec<u8>,
         expected: String,
@@ -194,85 +206,124 @@ enum Operation {
         remove: bool,
     },
 }
+pub(crate) fn execute(
+    state: &Path,
+    jobs: &crate::jobs::Jobs,
+    operation: Operation,
+) -> Result<Value> {
+    match operation {
+        Operation::Deploy {
+            root,
+            mode,
+            certificate,
+            job,
+        } => {
+            job.validate()?;
+            ensure!(
+                identity::fingerprint(&certificate) == job.peer,
+                "peer certificate mismatch"
+            );
+            jobs.validate_deployment(&job)?;
+            share::ensure_registration(state, &job.folder, &root, mode)?;
+            execute(
+                state,
+                jobs,
+                Operation::TrustPeer {
+                    certificate,
+                    expected: job.peer.clone(),
+                },
+            )?;
+            share::grant(state, &job.folder, &job.peer, false)?;
+            jobs.save_deployment(job)?;
+        }
+        Operation::TrustPeer {
+            certificate,
+            expected,
+        } => {
+            identity::valid_peer(&expected)?;
+            ensure!(
+                certificate.len() <= 64 * 1024 && identity::fingerprint(&certificate) == expected,
+                "certificate fingerprint does not match the independently verified device"
+            );
+            let trusted = state.join("peers").join(format!("{expected}.der"));
+            if trusted.try_exists()? {
+                ensure!(
+                    fs::symlink_metadata(&trusted)?.file_type().is_file()
+                        && fs::read(trusted)? == certificate,
+                    "existing trust does not match"
+                );
+                return Ok(json!({"peer":expected}));
+            }
+            let temporary = state.join(format!("peer-import-{}.der", random_id()?));
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)?;
+            file.write_all(&certificate)?;
+            file.sync_all()?;
+            drop(file);
+            let result = identity::trust(state, &temporary);
+            let _ = fs::remove_file(temporary);
+            return Ok(json!({"peer":result?}));
+        }
+        Operation::SaveJob { job } => {
+            jobs.save(job)?;
+        }
+        Operation::SetJobEnabled { id, enabled } => {
+            jobs.set_enabled(&id, enabled)?;
+        }
+        Operation::Pending { folder } => {
+            return Share::open(state, &folder)?.pending();
+        }
+        Operation::ApproveDeletion {
+            folder,
+            path,
+            expected,
+        } => {
+            Share::open(state, &folder)?.approve_deletion(&path, &expected)?;
+        }
+        Operation::CreateFolder { folder, root, mode } => {
+            Share::create(state, &folder, &root, mode)?;
+        }
+        Operation::Scan { folder } => {
+            return Ok(serde_json::to_value(
+                Share::open(state, &folder)?.scan(false)?,
+            )?);
+        }
+        Operation::Conflicts { folder } => {
+            return Share::open(state, &folder)?.conflicts();
+        }
+        Operation::History { folder, path } => {
+            return Share::open(state, &folder)?.history(&path);
+        }
+        Operation::Resolve {
+            folder,
+            path,
+            revision,
+        } => {
+            Share::open(state, &folder)?.choose(&path, &revision, false)?;
+        }
+        Operation::Restore {
+            folder,
+            path,
+            revision,
+        } => {
+            Share::open(state, &folder)?.choose(&path, &revision, true)?;
+        }
+        Operation::Grant {
+            folder,
+            peer,
+            remove,
+        } => {
+            share::grant(state, &folder, &peer, remove)?;
+        }
+    }
+    Ok(json!({"ok":true}))
+}
 async fn command(State(app): State<Arc<App>>, Json(operation): Json<Operation>) -> Response {
     outcome(
         match tokio::task::spawn_blocking(move || -> Result<Value> {
-            match operation {
-                Operation::TrustPeer {
-                    certificate,
-                    expected,
-                } => {
-                    identity::valid_peer(&expected)?;
-                    ensure!(
-                        certificate.len() <= 64 * 1024
-                            && identity::fingerprint(&certificate) == expected,
-                        "certificate fingerprint does not match the independently verified device"
-                    );
-                    let temporary = app.state.join(format!("peer-import-{}.der", random_id()?));
-                    let mut file = OpenOptions::new()
-                        .create_new(true)
-                        .write(true)
-                        .open(&temporary)?;
-                    file.write_all(&certificate)?;
-                    file.sync_all()?;
-                    drop(file);
-                    let result = identity::trust(&app.state, &temporary);
-                    let _ = fs::remove_file(temporary);
-                    return Ok(json!({"peer":result?}));
-                }
-                Operation::SaveJob { job } => {
-                    app.jobs.save(job)?;
-                }
-                Operation::SetJobEnabled { id, enabled } => {
-                    app.jobs.set_enabled(&id, enabled)?;
-                }
-                Operation::Pending { folder } => {
-                    return Share::open(&app.state, &folder)?.pending();
-                }
-                Operation::ApproveDeletion {
-                    folder,
-                    path,
-                    expected,
-                } => {
-                    Share::open(&app.state, &folder)?.approve_deletion(&path, &expected)?;
-                }
-                Operation::CreateFolder { folder, root, mode } => {
-                    Share::create(&app.state, &folder, &root, mode)?;
-                }
-                Operation::Scan { folder } => {
-                    return Ok(serde_json::to_value(
-                        Share::open(&app.state, &folder)?.scan(false)?,
-                    )?);
-                }
-                Operation::Conflicts { folder } => {
-                    return Share::open(&app.state, &folder)?.conflicts();
-                }
-                Operation::History { folder, path } => {
-                    return Share::open(&app.state, &folder)?.history(&path);
-                }
-                Operation::Resolve {
-                    folder,
-                    path,
-                    revision,
-                } => {
-                    Share::open(&app.state, &folder)?.choose(&path, &revision, false)?;
-                }
-                Operation::Restore {
-                    folder,
-                    path,
-                    revision,
-                } => {
-                    Share::open(&app.state, &folder)?.choose(&path, &revision, true)?;
-                }
-                Operation::Grant {
-                    folder,
-                    peer,
-                    remove,
-                } => {
-                    share::grant(&app.state, &folder, &peer, remove)?;
-                }
-            }
-            Ok(json!({"ok":true}))
+            execute(&app.state, &app.jobs, operation)
         })
         .await
         {
@@ -287,6 +338,9 @@ pub async fn serve(state: &Path, listen: SocketAddr) -> Result<()> {
         "management must listen on a loopback address"
     );
     let state = state.canonicalize()?;
+    if state.join("central-server.json").try_exists()? {
+        return crate::central::serve(&state, listen).await;
+    }
     let credential = token(&state)?;
     let lock = OpenOptions::new()
         .create(true)
@@ -308,7 +362,24 @@ pub async fn serve(state: &Path, listen: SocketAddr) -> Result<()> {
             let _ = tokio::task::spawn_blocking(move || jobs.tick()).await;
         }
     });
+    let central = Arc::new(Mutex::new(json!({"state":"not-enrolled"})));
+    let agent = if state.join("central-agent.json").try_exists()? {
+        let state = state.clone();
+        let jobs = jobs.clone();
+        let status = central.clone();
+        Some(tokio::spawn(async move {
+            if let Err(error) = crate::central::run_agent(state, jobs, status.clone()).await {
+                if let Ok(mut value) = status.lock() {
+                    *value = json!({"state":"error","error":format!("{error:#}")});
+                }
+                eprintln!("Central agent stopped: {error:#}");
+            }
+        }))
+    } else {
+        None
+    };
     let app = Arc::new(App {
+        central,
         device: identity::fingerprint(&fs::read(state.join("identity.der"))?),
         state,
         token: credential,
@@ -351,6 +422,9 @@ pub async fn serve(state: &Path, listen: SocketAddr) -> Result<()> {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await;
+    if let Some(agent) = agent {
+        agent.abort();
+    }
     supervisor.abort();
     jobs.shutdown();
     result?;

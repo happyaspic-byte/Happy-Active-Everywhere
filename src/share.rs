@@ -974,3 +974,19 @@ pub fn catalog(state: &Path) -> Result<serde_json::Value> {
         serde_json::json!({"identity":identity::fingerprint(&fs::read(state.join("identity.der"))?),"version":env!("CARGO_PKG_VERSION"),"folders":folders}),
     )
 }
+
+/// Central configuration retries may reuse an identical registration only.
+pub(crate) fn ensure_registration(state: &Path, id: &str, root: &Path, mode: Mode) -> Result<()> {
+    ensure!(root.is_absolute(), "use the device folder's absolute path");
+    let directory = directory(state, id)?;
+    if directory.try_exists()? {
+        let config = read_config(&directory)?;
+        ensure!(
+            same_file::is_same_file(&config.root, root)? && config.mode == mode,
+            "existing folder has a different path or mode; inspect it before redeploying"
+        );
+    } else {
+        drop(Share::create(state, id, root, mode)?);
+    }
+    Ok(())
+}
