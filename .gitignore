@@ -1,3 +1,11 @@
 /target/
 /node_modules/
 .DS_Store
+
+/browser-report/
+
+/dist/
+
+__pycache__/
+
+/folder-report/

@@ -169,3 +169,35 @@ fn partial_version_copy_does_not_permanently_block_recovery() {
         b"old version"
     );
 }
+
+#[test]
+fn edits_through_an_open_file_survive_destination_replacement() {
+    use std::io::{Seek, SeekFrom, Write};
+    let d = TempDir::new().unwrap();
+    let source = d.path().join("source");
+    let target = d.path().join("target");
+    fs::write(&source, b"incoming").unwrap();
+    fs::write(&target, b"original").unwrap();
+    let mut editor = fs::OpenOptions::new().write(true).open(&target).unwrap();
+    let mut receiver = Receiver::open(&target, Manifest::from_path(&source).unwrap()).unwrap();
+    receiver.put(0, b"incoming").unwrap();
+    receiver.finish().unwrap();
+    // Real editors can retain an open handle across a pathname replacement.
+    // A copy of the original bytes does not preserve writes to that handle.
+    editor.seek(SeekFrom::Start(0)).unwrap();
+    editor.write_all(b"latest local edit").unwrap();
+    editor.sync_all().unwrap();
+    drop(editor);
+    fn contains_bytes(dir: &std::path::Path, expected: &[u8]) -> bool {
+        fs::read_dir(dir).unwrap().any(|item| {
+            let path = item.unwrap().path();
+            if path.is_dir() {
+                contains_bytes(&path, expected)
+            } else {
+                fs::read(path).is_ok_and(|bytes| bytes == expected)
+            }
+        })
+    }
+    assert_eq!(fs::read(&target).unwrap(), b"incoming");
+    assert!(contains_bytes(d.path(), b"latest local edit"));
+}

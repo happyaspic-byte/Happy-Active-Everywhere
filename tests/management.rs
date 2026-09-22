@@ -1,0 +1,193 @@
+use everywhere::identity;
+use serde_json::Value;
+use std::{
+    fs,
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpStream,
+    process::{Child, Command, Stdio},
+    sync::mpsc,
+    thread,
+    time::Duration,
+};
+use tempfile::TempDir;
+
+struct Server(Child);
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+fn request(
+    address: &str,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    origin: Option<&str>,
+    body: &str,
+) -> String {
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let auth = token
+        .map(|t| format!("Authorization: Bearer {t}\r\n"))
+        .unwrap_or_default();
+    let origin = origin
+        .map(|o| format!("Origin: {o}\r\n"))
+        .unwrap_or_default();
+    write!(stream, "{method} {path} HTTP/1.1\r\nHost: {address}\r\n{auth}{origin}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
+#[test]
+fn management_requires_token_and_same_origin_and_registers_a_real_folder() {
+    let temporary = TempDir::new().unwrap();
+    let state = temporary.path().join("state");
+    let root = temporary.path().join("files");
+    identity::init(&state).unwrap();
+    fs::create_dir(&root).unwrap();
+    let token = Command::new(env!("CARGO_BIN_EXE_everywhere"))
+        .args(["management-token", "--state", state.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        token.status.success(),
+        "{}",
+        String::from_utf8_lossy(&token.stderr)
+    );
+    let token = String::from_utf8(token.stdout).unwrap();
+    let token = token.trim();
+    assert_eq!(token.len(), 64);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_everywhere"))
+        .args([
+            "manage",
+            "--state",
+            state.to_str().unwrap(),
+            "--listen",
+            "127.0.0.1:0",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if tx.send(line.unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    let server = Server(child);
+    let line = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("management server did not listen");
+    assert!(!line.contains(token));
+    let address = line.trim().strip_prefix("LISTEN ").unwrap();
+    let page = request(address, "GET", "/", None, None, "");
+    assert!(page.starts_with("HTTP/1.1 200"));
+    assert!(page.contains("Content-Security-Policy") || page.contains("content-security-policy"));
+    assert!(!page.contains(token));
+    assert!(request(address, "GET", "/api/status", None, None, "").starts_with("HTTP/1.1 401"));
+    assert!(
+        request(address, "GET", "/api/status", Some("wrong"), None, "").starts_with("HTTP/1.1 401")
+    );
+    assert!(
+        request(
+            address,
+            "GET",
+            "/api/status",
+            Some(token),
+            Some("https://untrusted.example"),
+            ""
+        )
+        .starts_with("HTTP/1.1 403")
+    );
+    let body = serde_json::json!({"action":"create-folder","folder":"photos","root":root,"mode":"bidirectional"}).to_string();
+    let result = request(
+        address,
+        "POST",
+        "/api/command",
+        Some(token),
+        Some(&format!("http://{address}")),
+        &body,
+    );
+    assert!(result.starts_with("HTTP/1.1 200"), "{result}");
+    assert!(root.join(".everywhere-folder").is_file());
+    let response = request(address, "GET", "/api/status", Some(token), None, "");
+    assert!(response.starts_with("HTTP/1.1 200"));
+    let json: Value = serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(json["folders"][0]["folder"], "photos");
+    assert_eq!(json["folders"][0]["files"], 0);
+    let peer_state = temporary.path().join("peer-state");
+    let peer = identity::init(&peer_state).unwrap();
+    let certificate = fs::read(peer_state.join("identity.der")).unwrap();
+    let wrong = serde_json::json!({"action":"trust-peer","certificate":certificate,"expected":"0".repeat(64)}).to_string();
+    assert!(
+        request(address, "POST", "/api/command", Some(token), None, &wrong)
+            .starts_with("HTTP/1.1 409")
+    );
+    assert!(!state.join("peers").join(format!("{peer}.der")).exists());
+    let trust =
+        serde_json::json!({"action":"trust-peer","certificate":certificate,"expected":peer})
+            .to_string();
+    assert!(
+        request(address, "POST", "/api/command", Some(token), None, &trust)
+            .starts_with("HTTP/1.1 200")
+    );
+    assert!(state.join("peers").join(format!("{peer}.der")).is_file());
+    fs::write(root.join("note.txt"), b"review deletion").unwrap();
+    let scan = serde_json::json!({"action":"scan","folder":"photos"}).to_string();
+    assert!(
+        request(address, "POST", "/api/command", Some(token), None, &scan)
+            .starts_with("HTTP/1.1 200")
+    );
+    fs::remove_file(root.join("note.txt")).unwrap();
+    assert!(
+        request(address, "POST", "/api/command", Some(token), None, &scan)
+            .starts_with("HTTP/1.1 200")
+    );
+    let pending = request(
+        address,
+        "POST",
+        "/api/command",
+        Some(token),
+        None,
+        r#"{"action":"pending","folder":"photos"}"#,
+    );
+    assert!(pending.starts_with("HTTP/1.1 200"), "{pending}");
+    let pending: Value = serde_json::from_str(pending.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(pending[0]["path"], "note.txt");
+    let approve = serde_json::json!({"action":"approve-deletion","folder":"photos","path":"note.txt","expected":pending[0]["versions"]}).to_string();
+    // An edit after review invalidates the approval rather than deleting it.
+    fs::write(root.join("note.txt"), b"new local edit").unwrap();
+    assert!(
+        request(address, "POST", "/api/command", Some(token), None, &approve)
+            .starts_with("HTTP/1.1 409")
+    );
+    assert_eq!(fs::read(root.join("note.txt")).unwrap(), b"new local edit");
+    fs::remove_file(root.join("note.txt")).unwrap();
+    assert!(
+        request(address, "POST", "/api/command", Some(token), None, &scan)
+            .starts_with("HTTP/1.1 200")
+    );
+    let pending = request(
+        address,
+        "POST",
+        "/api/command",
+        Some(token),
+        None,
+        r#"{"action":"pending","folder":"photos"}"#,
+    );
+    let pending: Value = serde_json::from_str(pending.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    let approve = serde_json::json!({"action":"approve-deletion","folder":"photos","path":"note.txt","expected":pending[0]["versions"]}).to_string();
+    assert!(
+        request(address, "POST", "/api/command", Some(token), None, &approve)
+            .starts_with("HTTP/1.1 200")
+    );
+    drop(server);
+    reader.join().unwrap();
+}

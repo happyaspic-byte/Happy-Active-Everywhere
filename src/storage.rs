@@ -39,8 +39,12 @@ fn regular(path: &Path) -> Result<bool> {
 impl Manifest {
     pub fn from_path(path: &Path) -> Result<Self> {
         ensure!(regular(path)?, "source missing");
-        let mut file = File::open(path)?;
+        Self::from_file(File::open(path)?)
+    }
+
+    pub(crate) fn from_file(mut file: File) -> Result<Self> {
         let before = file.metadata()?;
+        ensure!(before.is_file(), "source must be a regular file");
         let size = before.len();
         ensure!(size <= MAX_SIZE, "file exceeds 1 TiB alpha limit");
         let mut full = blake3::Hasher::new();
@@ -114,12 +118,149 @@ struct Journal {
     original: Option<Manifest>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InstallIntent {
+    recovery_id: String,
+    original: Manifest,
+    incoming: Manifest,
+}
+
+fn private_directory(parent: &Path, name: &str) -> Result<PathBuf> {
+    let path = parent.join(name);
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(&path) {
+        Ok(()) => sync_dir(parent)?,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e.into()),
+    }
+    ensure!(
+        fs::symlink_metadata(&path)?.file_type().is_dir(),
+        "unsafe private history directory"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Also protect history directories created by older versions.
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+        sync_dir(&path)?;
+    }
+    Ok(path)
+}
+
+fn recovery_directory(parent: &Path) -> Result<PathBuf> {
+    private_directory(parent, ".everywhere-recovery")
+}
+
+// Record intent before moving the old directory entry. Preserve the actual file,
+// not only a byte snapshot: editors may still hold and write its open handle.
+fn prepare_install(
+    target: &Path,
+    part: &Path,
+    intent_path: &Path,
+    original: &Manifest,
+    incoming: &Manifest,
+) -> Result<PathBuf> {
+    let parent = target.parent().context("target has no parent")?;
+    let recovery = recovery_directory(parent)?;
+    let recovery_id = blake3::hash(&rcgen::KeyPair::generate()?.serialize_der())
+        .to_hex()
+        .to_string();
+    let directory = recovery.join(&recovery_id);
+    fs::create_dir(&directory)?;
+    // Also preflight hard-link support before touching the user's target.
+    fs::hard_link(part, directory.join("incoming"))?;
+    let intent = InstallIntent {
+        recovery_id,
+        original: original.clone(),
+        incoming: incoming.clone(),
+    };
+    let mut record = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(directory.join("record.json"))?;
+    serde_json::to_writer(
+        &mut record,
+        &serde_json::json!({
+            "target": target.file_name(), "intent": intent,
+        }),
+    )?;
+    record.sync_all()?;
+    sync_dir(&directory)?;
+    sync_dir(&recovery)?;
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(intent_path)?;
+    serde_json::to_writer(&mut file, &intent)?;
+    file.sync_all()?;
+    sync_dir(parent)?;
+    let displaced = directory.join("previous");
+    fs::rename(target, &displaced)?;
+    sync_dir(&directory)?;
+    sync_dir(parent)?;
+    Ok(displaced)
+}
+
+fn recover_install(target: &Path, intent_path: &Path, incoming: &Manifest) -> Result<()> {
+    if !regular(intent_path)? {
+        return Ok(());
+    }
+    let intent: InstallIntent =
+        serde_json::from_reader(File::open(intent_path)?.take(160 * 1024 * 1024))?;
+    ensure!(
+        valid_hash(&intent.recovery_id),
+        "invalid recovery identifier"
+    );
+    ensure!(
+        intent.incoming == *incoming,
+        "install intent manifest mismatch"
+    );
+    intent.original.validate()?;
+    let parent = target.parent().context("target has no parent")?;
+    let recovery = recovery_directory(parent)?;
+    let directory = recovery.join(&intent.recovery_id);
+    ensure!(
+        fs::symlink_metadata(&directory)?.file_type().is_dir(),
+        "unsafe recovery entry"
+    );
+    let displaced = directory.join("previous");
+    if !regular(target)? {
+        ensure!(
+            regular(&displaced)?,
+            "interrupted install has no recoverable original"
+        );
+        // Atomic no-clobber restore. A newly created local file wins the race.
+        match fs::hard_link(&displaced, target) {
+            Ok(()) => sync_dir(parent)?,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let current = snapshot(target)?;
+    ensure!(
+        current.as_ref() == Some(&intent.original) || current.as_ref() == Some(incoming),
+        "local change during interrupted install; target and recovery files preserved at {}",
+        directory.display()
+    );
+    fs::remove_file(intent_path)?;
+    sync_dir(parent)?;
+    Ok(())
+}
+
 pub struct Receiver {
     target: PathBuf,
     journal_path: PathBuf,
     part_path: PathBuf,
     part: File,
     _lock: File,
+    _alias_lock: File,
     manifest: Manifest,
     original: Option<Manifest>,
     finished: bool,
@@ -136,12 +277,31 @@ impl Receiver {
         regular(&target)?;
         let name = target.file_name().unwrap().as_encoded_bytes();
         let id = blake3::hash(name).to_hex().to_string();
+        // Let the filesystem resolve aliases instead of approximating its
+        // Unicode/case rules. Keep permanent entries and the legacy hash lock
+        // so outstanding journals keep their original names.
+        let lock_directory = private_directory(&parent, ".everywhere-locks")?;
+        let lock_name = match target.canonicalize() {
+            Ok(path) => path
+                .file_name()
+                .context("target must name a file")?
+                .to_owned(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                target.file_name().unwrap().to_owned()
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let alias_lock = open_rw(&lock_directory.join(lock_name))?;
+        alias_lock
+            .try_lock_exclusive()
+            .context("another receiver owns a destination alias")?;
         let lock = open_rw(&parent.join(format!(".everywhere-{id}.lock")))?;
         lock.try_lock_exclusive()
             .context("another receiver owns target")?;
-        let original = snapshot(&target)?;
         let part_path = parent.join(format!(".everywhere-{id}-{}.part", manifest.hash));
         let journal_path = parent.join(format!(".everywhere-{id}-{}.json", manifest.hash));
+        recover_install(&target, &journal_path.with_extension("install"), &manifest)?;
+        let original = snapshot(&target)?;
         if regular(&journal_path)? {
             let journal: Journal =
                 serde_json::from_reader(File::open(&journal_path)?.take(160 * 1024 * 1024))?;
@@ -181,16 +341,23 @@ impl Receiver {
             part_path,
             part,
             _lock: lock,
+            _alias_lock: alias_lock,
             manifest,
             original,
             finished: false,
         })
     }
     pub fn missing(&mut self) -> Result<Vec<u64>> {
+        self.missing_from(None)
+    }
+    pub(crate) fn missing_from(&mut self, basis: Option<&Path>) -> Result<Vec<u64>> {
         let mut missing = Vec::new();
         let mut buffer = vec![0; BLOCK_SIZE];
         let mut existing = if regular(&self.target)? {
             Some(File::open(&self.target)?)
+        } else if let Some(basis) = basis {
+            ensure!(regular(basis)?, "reuse basis must be a regular file");
+            Some(File::open(basis)?)
         } else {
             None
         };
@@ -237,7 +404,13 @@ impl Receiver {
         Ok(())
     }
     pub fn finish(&mut self) -> Result<()> {
+        self.finish_checked(|| Ok(()))
+    }
+
+    pub(crate) fn finish_checked(&mut self, authorize: impl Fn() -> Result<()>) -> Result<()> {
         ensure!(!self.finished, "receiver already complete");
+        let intent_path = self.journal_path.with_extension("install");
+        recover_install(&self.target, &intent_path, &self.manifest)?;
         self.part.sync_all()?;
         ensure!(
             Manifest::from_path(&self.part_path)? == self.manifest,
@@ -249,15 +422,7 @@ impl Receiver {
         );
         let parent = self.target.parent().unwrap();
         if let Some(old) = &self.original {
-            let versions = parent.join(".everywhere-versions");
-            if versions.exists() {
-                ensure!(
-                    fs::symlink_metadata(&versions)?.file_type().is_dir(),
-                    "unsafe versions directory"
-                );
-            } else {
-                fs::create_dir(&versions)?;
-            }
+            let versions = private_directory(parent, ".everywhere-versions")?;
             let id = blake3::hash(self.target.file_name().unwrap().as_encoded_bytes()).to_hex();
             let version = versions.join(format!("{id}-{}", old.hash));
             if regular(&version)? && Manifest::from_path(&version)? != *old {
@@ -274,16 +439,26 @@ impl Receiver {
             }
             if !regular(&version)? {
                 let mut input = File::open(&self.target)?;
-                let mut output = OpenOptions::new()
-                    .create_new(true)
-                    .write(true)
-                    .open(&version)?;
+                let mut options = OpenOptions::new();
+                options.create_new(true).write(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                let mut output = options.open(&version)?;
                 std::io::copy(&mut input, &mut output)?;
                 output.sync_all()?;
                 ensure!(
                     Manifest::from_path(&version)? == *old,
                     "target changed while saving version"
                 );
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&version, fs::Permissions::from_mode(0o600))?;
+                File::open(&version)?.sync_all()?;
             }
             sync_dir(&versions)?;
             sync_dir(parent)?;
@@ -292,8 +467,40 @@ impl Receiver {
             snapshot(&self.target)? == self.original,
             "target changed before install"
         );
-        fs::rename(&self.part_path, &self.target)?;
+        authorize()?;
+        if let Some(old) = &self.original {
+            let displaced = prepare_install(
+                &self.target,
+                &self.part_path,
+                &intent_path,
+                old,
+                &self.manifest,
+            )?;
+            if snapshot(&displaced)?.as_ref() != Some(old) {
+                // Keep a concurrently saved replacement at its original name
+                // when possible, and retain its real file in recovery in all cases.
+                let _ = fs::hard_link(&displaced, &self.target);
+                sync_dir(parent)?;
+                anyhow::bail!(
+                    "target changed at install; local content preserved at {}",
+                    displaced.display()
+                );
+            }
+        }
+        // Unlike rename, hard_link never replaces an entry that appeared after
+        // our check. Unsupported filesystems fail closed with all data retained.
+        if let Err(error) = fs::hard_link(&self.part_path, &self.target) {
+            if self.original.is_some() {
+                let _ = recover_install(&self.target, &intent_path, &self.manifest);
+            }
+            return Err(error).context("could not publish destination; all versions preserved");
+        }
         sync_dir(parent)?;
+        if regular(&intent_path)? {
+            fs::remove_file(&intent_path)?;
+            sync_dir(parent)?;
+        }
+        fs::remove_file(&self.part_path)?;
         fs::remove_file(&self.journal_path)?;
         sync_dir(parent)?;
         self.finished = true;
@@ -303,6 +510,30 @@ impl Receiver {
 
 pub fn restore(version: &Path, target: &Path) -> Result<()> {
     let manifest = Manifest::from_path(version)?;
+    let name = version.file_name().and_then(|name| name.to_str());
+    let expected = name
+        .and_then(|name| name.split_once('-'))
+        .filter(|(path_hash, content_hash)| valid_hash(path_hash) && valid_hash(content_hash))
+        .map(|(_, content_hash)| content_hash);
+    let archive_parent = version
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .canonicalize()?;
+    let in_archive = archive_parent
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(".everywhere-versions"));
+    ensure!(
+        !in_archive || expected.is_some(),
+        "unrecognized or quarantined archived version; automatic restore refused"
+    );
+    if let Some(expected) = expected {
+        ensure!(
+            manifest.hash == expected,
+            "archived version hash mismatch; current file preserved"
+        );
+    }
     let mut receiver = Receiver::open(target, manifest.clone())?;
     let mut source = File::open(version)?;
     let mut buffer = vec![0; BLOCK_SIZE];
@@ -317,4 +548,63 @@ pub fn restore(version: &Path, target: &Path) -> Result<()> {
         "version changed during restore"
     );
     receiver.finish()
+}
+
+#[cfg(test)]
+mod install_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn restart_restores_original_after_displacement_before_publication() {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source");
+        let target = dir.path().join("target");
+        fs::write(&source, b"incoming").unwrap();
+        fs::write(&target, b"original").unwrap();
+        let manifest = Manifest::from_path(&source).unwrap();
+        let mut receiver = Receiver::open(&target, manifest.clone()).unwrap();
+        receiver.put(0, b"incoming").unwrap();
+        let displaced = prepare_install(
+            &target,
+            &receiver.part_path,
+            &receiver.journal_path.with_extension("install"),
+            receiver.original.as_ref().unwrap(),
+            &manifest,
+        )
+        .unwrap();
+        assert!(!target.exists());
+        drop(receiver);
+        let mut resumed = Receiver::open(&target, manifest).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"original");
+        assert!(resumed.missing().unwrap().is_empty());
+        resumed.finish().unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"incoming");
+        assert_eq!(fs::read(displaced).unwrap(), b"original");
+    }
+
+    #[test]
+    fn recovery_never_overwrites_a_file_created_during_install() {
+        let dir = TempDir::new().unwrap();
+        let source = dir.path().join("source");
+        let target = dir.path().join("target");
+        fs::write(&source, b"incoming").unwrap();
+        fs::write(&target, b"original").unwrap();
+        let manifest = Manifest::from_path(&source).unwrap();
+        let mut receiver = Receiver::open(&target, manifest.clone()).unwrap();
+        receiver.put(0, b"incoming").unwrap();
+        let displaced = prepare_install(
+            &target,
+            &receiver.part_path,
+            &receiver.journal_path.with_extension("install"),
+            receiver.original.as_ref().unwrap(),
+            &manifest,
+        )
+        .unwrap();
+        fs::write(&target, b"concurrent save").unwrap();
+        drop(receiver);
+        assert!(Receiver::open(&target, manifest).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"concurrent save");
+        assert_eq!(fs::read(displaced).unwrap(), b"original");
+    }
 }

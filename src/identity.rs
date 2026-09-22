@@ -13,7 +13,7 @@ use std::{
 pub fn fingerprint(der: &[u8]) -> String {
     blake3::hash(der).to_hex().to_string()
 }
-fn valid_peer(peer: &str) -> Result<()> {
+pub(crate) fn valid_peer(peer: &str) -> Result<()> {
     ensure!(
         peer.len() == 64
             && peer
@@ -64,6 +64,7 @@ fn regular_read(path: &Path) -> Result<Vec<u8>> {
     Ok(data)
 }
 pub fn trust(state: &Path, cert: &Path) -> Result<String> {
+    let _device = crate::device::config_guard(state)?;
     let der = regular_read(cert)?;
     let mut roots = RootCertStore::empty();
     roots.add(CertificateDer::from(der.clone()))?;
@@ -72,10 +73,14 @@ pub fn trust(state: &Path, cert: &Path) -> Result<String> {
     Ok(id)
 }
 pub fn revoke(state: &Path, peer: &str) -> Result<()> {
+    let _device = crate::device::config_guard(state)?;
     valid_peer(peer)?;
     fs::remove_file(state.join("peers").join(format!("{peer}.der")))?;
     Ok(())
 }
+pub(crate) const PROTOCOL: &[u8] = b"everywhere/2";
+
+#[derive(Clone)]
 pub struct Identity {
     state: PathBuf,
     pub peer: String,
@@ -110,6 +115,9 @@ impl Identity {
         ))
     }
     pub fn server(&self) -> Result<Arc<ServerConfig>> {
+        self.server_protocol(PROTOCOL)
+    }
+    pub(crate) fn server_protocol(&self, protocol: &[u8]) -> Result<Arc<ServerConfig>> {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
             Arc::new(self.roots()?),
@@ -121,18 +129,21 @@ impl Identity {
             .with_protocol_versions(&[&rustls::version::TLS13])?
             .with_client_cert_verifier(verifier)
             .with_single_cert(cert, key)?;
-        config.alpn_protocols = vec![b"everywhere/1".to_vec()];
+        config.alpn_protocols = vec![protocol.to_vec()];
         config.send_tls13_tickets = 0;
         Ok(Arc::new(config))
     }
     pub fn client(&self) -> Result<Arc<ClientConfig>> {
+        self.client_protocol(PROTOCOL)
+    }
+    pub(crate) fn client_protocol(&self, protocol: &[u8]) -> Result<Arc<ClientConfig>> {
         let (cert, key) = self.own()?;
         let mut config =
             ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
                 .with_protocol_versions(&[&rustls::version::TLS13])?
                 .with_root_certificates(self.roots()?)
                 .with_client_auth_cert(cert, key)?;
-        config.alpn_protocols = vec![b"everywhere/1".to_vec()];
+        config.alpn_protocols = vec![protocol.to_vec()];
         config.resumption = rustls::client::Resumption::disabled();
         Ok(Arc::new(config))
     }
